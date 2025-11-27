@@ -20,37 +20,42 @@ pub mod windows {
     pub fn scan_start_menu() -> Result<Vec<AppInfo>, String> {
         let mut apps = Vec::new();
 
-        // Common start menu paths
+        // Common start menu paths - only scan user's start menu for speed
         let start_menu_paths = vec![
             env::var("APPDATA")
                 .ok()
                 .map(|p| PathBuf::from(p).join("Microsoft/Windows/Start Menu/Programs")),
-            env::var("PROGRAMDATA")
-                .ok()
-                .map(|p| PathBuf::from(p).join("Microsoft/Windows/Start Menu/Programs")),
+            // Skip PROGRAMDATA for now - it's slower and less commonly used
+            // env::var("PROGRAMDATA")
+            //     .ok()
+            //     .map(|p| PathBuf::from(p).join("Microsoft/Windows/Start Menu/Programs")),
         ];
 
         for start_menu_path in start_menu_paths.into_iter().flatten() {
             if start_menu_path.exists() {
-                // Start scanning from depth 0
+                // Start scanning from depth 0, limit to 2 levels for speed
                 if let Err(_) = scan_directory(&start_menu_path, &mut apps, 0) {
                     // Continue on error
                 }
             }
         }
 
+        // Remove duplicates based on name
+        apps.sort_by(|a, b| a.name.cmp(&b.name));
+        apps.dedup_by(|a, b| a.name == b.name);
+
         Ok(apps)
     }
 
     fn scan_directory(dir: &Path, apps: &mut Vec<AppInfo>, depth: usize) -> Result<(), String> {
-        // Limit recursion depth to avoid scanning too deep
-        const MAX_DEPTH: usize = 3;
+        // Limit recursion depth to avoid scanning too deep (reduced to 2 for speed)
+        const MAX_DEPTH: usize = 2;
         if depth > MAX_DEPTH {
             return Ok(());
         }
         
-        // Limit total number of apps to avoid memory issues
-        const MAX_APPS: usize = 1000;
+        // Limit total number of apps to avoid memory issues (reduced for speed)
+        const MAX_APPS: usize = 500;
         if apps.len() >= MAX_APPS {
             return Ok(());
         }
@@ -77,10 +82,20 @@ pub mod windows {
                     // Continue on error
                 }
             } else if path.extension().and_then(|s| s.to_str()) == Some("lnk") {
-                // Parse .lnk file to get target - skip on error to avoid blocking
-                if let Ok(app_info) = parse_lnk_file(&path) {
-                    apps.push(app_info);
+                // Skip .lnk parsing for now - it's too slow with PowerShell
+                // Just use the .lnk filename as the app name
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                    apps.push(AppInfo {
+                        name: name.to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        icon: None,
+                        description: None,
+                    });
                 }
+                // TODO: Optionally parse .lnk files in background for better results
+                // if let Ok(app_info) = parse_lnk_file(&path) {
+                //     apps.push(app_info);
+                // }
             } else if path.extension().and_then(|s| s.to_str()) == Some("exe") {
                 // Direct executable
                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {

@@ -8,29 +8,41 @@ export function LauncherWindow() {
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [filteredApps, setFilteredApps] = useState<AppInfo[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Load applications on mount - delay to avoid blocking UI
+  // Focus input when window becomes visible
   useEffect(() => {
-    // Don't auto-load on mount to avoid blocking startup
-    // User can trigger scan manually or we can load on first search
-    // const timer = setTimeout(() => {
-    //   loadApplications();
-    // }, 100);
-    // 
-    // return () => clearTimeout(timer);
+    const window = getCurrentWindow();
+    
+    // Ensure window has no decorations
+    window.setDecorations(false).catch(console.error);
+    
+    const unlisten = window.onFocusChanged(({ payload: focused }) => {
+      if (focused && inputRef.current) {
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 100);
+      }
+    });
+
+    // Also focus on mount
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 100);
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   // Search applications when query changes
   useEffect(() => {
     if (query.trim() === "") {
-      // Don't show anything when empty to avoid loading
       setFilteredApps([]);
       setSelectedIndex(0);
     } else {
-      // Only search when user types something
       searchApplications(query);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -38,7 +50,7 @@ export function LauncherWindow() {
 
   // Scroll selected item into view
   useEffect(() => {
-    if (listRef.current && selectedIndex >= 0) {
+    if (listRef.current && selectedIndex >= 0 && filteredApps.length > 0) {
       const items = listRef.current.children;
       if (items[selectedIndex]) {
         items[selectedIndex].scrollIntoView({
@@ -47,50 +59,11 @@ export function LauncherWindow() {
         });
       }
     }
-  }, [selectedIndex]);
-
-  // Focus input when window becomes visible
-  useEffect(() => {
-    const window = getCurrentWindow();
-    const unlisten = window.onFocusChanged(({ payload: focused }) => {
-      if (focused && inputRef.current) {
-        inputRef.current.focus();
-      }
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  // Listen for Alt+Space globally (when window is focused)
-  useEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      // Alt+Space to toggle launcher
-      if (e.altKey && e.key === " ") {
-        e.preventDefault();
-        const window = getCurrentWindow();
-        const isVisible = await window.isVisible();
-        if (isVisible) {
-          await window.hide();
-        } else {
-          await window.show();
-          await window.setFocus();
-          if (inputRef.current) {
-            inputRef.current.focus();
-          }
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [selectedIndex, filteredApps.length]);
 
   const loadApplications = async () => {
     try {
       setIsLoading(true);
-      // Use setTimeout to yield to the event loop and avoid blocking
       await new Promise<void>((resolve) => {
         setTimeout(async () => {
           try {
@@ -176,69 +149,122 @@ export function LauncherWindow() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-white/95 backdrop-blur-md rounded-lg shadow-2xl border border-gray-200">
-      {/* Search Box */}
-      <div className="p-4 border-b border-gray-200">
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="搜索应用..."
-          className="w-full px-4 py-3 text-lg border-none outline-none bg-transparent placeholder-gray-400"
-          autoFocus
-        />
-      </div>
-
-      {/* Results List */}
-      <div
-        ref={listRef}
-        className="flex-1 overflow-y-auto p-2"
-        style={{ maxHeight: "400px" }}
-      >
-        {isLoading ? (
-          <div className="p-4 text-center text-gray-500">正在扫描应用...</div>
-        ) : filteredApps.length === 0 ? (
-          <div className="p-4 text-center text-gray-500">
-            {query ? "未找到匹配的应用" : "输入关键词搜索应用（首次搜索会扫描应用）"}
+    <div className="flex flex-col h-full items-center justify-center bg-transparent">
+      {/* Main Search Container - utools style */}
+      <div className="w-full max-w-2xl mx-auto px-4">
+        <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">
+          {/* Search Box */}
+          <div className="px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-3">
+              <svg
+                className="w-5 h-5 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="输入应用名称或命令..."
+                className="flex-1 text-lg border-none outline-none bg-transparent placeholder-gray-400 text-gray-700"
+                autoFocus
+              />
+            </div>
           </div>
-        ) : (
-          filteredApps.map((app, index) => (
+
+          {/* Results List */}
+          {filteredApps.length > 0 && (
             <div
-              key={`${app.path}-${index}`}
-              onClick={() => handleLaunch(app)}
-              className={`px-4 py-3 rounded cursor-pointer transition-colors ${
-                index === selectedIndex
-                  ? "bg-blue-500 text-white"
-                  : "hover:bg-gray-100"
-              }`}
+              ref={listRef}
+              className="max-h-96 overflow-y-auto"
             >
-              <div className="font-medium">{app.name}</div>
-              {app.path && (
+              {filteredApps.map((app, index) => (
                 <div
-                  className={`text-sm ${
-                    index === selectedIndex ? "text-blue-100" : "text-gray-500"
+                  key={`${app.path}-${index}`}
+                  onClick={() => handleLaunch(app)}
+                  className={`px-6 py-3 cursor-pointer transition-all ${
+                    index === selectedIndex
+                      ? "bg-blue-500 text-white"
+                      : "hover:bg-gray-50 text-gray-700"
                   }`}
                 >
-                  {app.path}
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 ${
+                      index === selectedIndex ? "bg-blue-400" : "bg-gray-200"
+                    }`}>
+                      <svg
+                        className={`w-5 h-5 ${
+                          index === selectedIndex ? "text-white" : "text-gray-500"
+                        }`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{app.name}</div>
+                      {app.path && (
+                        <div
+                          className={`text-sm truncate ${
+                            index === selectedIndex ? "text-blue-100" : "text-gray-500"
+                          }`}
+                        >
+                          {app.path}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
-          ))
-        )}
-      </div>
+          )}
 
-      {/* Footer */}
-      <div className="px-4 py-2 border-t border-gray-200 text-xs text-gray-500 flex justify-between">
-        <span>
-          {filteredApps.length > 0
-            ? `找到 ${filteredApps.length} 个结果`
-            : ""}
-        </span>
-        <span>↑↓ 选择 | Enter 打开 | Esc 关闭</span>
+          {/* Loading or Empty State */}
+          {isLoading && (
+            <div className="px-6 py-8 text-center text-gray-500">
+              <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-gray-400 mb-2"></div>
+              <div>正在扫描应用...</div>
+            </div>
+          )}
+
+          {!isLoading && filteredApps.length === 0 && query && (
+            <div className="px-6 py-8 text-center text-gray-500">
+              未找到匹配的应用
+            </div>
+          )}
+
+          {!isLoading && filteredApps.length === 0 && !query && (
+            <div className="px-6 py-8 text-center text-gray-400 text-sm">
+              输入关键词搜索应用
+            </div>
+          )}
+
+          {/* Footer */}
+          {filteredApps.length > 0 && (
+            <div className="px-6 py-2 border-t border-gray-100 text-xs text-gray-400 flex justify-between bg-gray-50/50">
+              <span>{filteredApps.length} 个结果</span>
+              <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-
