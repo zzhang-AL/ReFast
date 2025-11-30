@@ -74,10 +74,10 @@ pub mod windows {
     use std::path::PathBuf;
 
     // Everything IPC 常量
-    // Everything 1.4+ 使用主窗口类名（旧的 EVERYTHING_TASKBAR_NOTIFICATION 已失效）
-    const EVERYTHING_IPC_WNDCLASS: &str = "EVERYTHING";
-    // Everything 1.4+ 新协议 QueryW
-    const EVERYTHING_IPC_COPYDATAQUERYW: usize = 0x10001;  // 新协议标识
+    // Everything v1.4 使用 EVERYTHING_TASKBAR_NOTIFICATION 窗口类进行 IPC
+    const EVERYTHING_IPC_WNDCLASS: &str = "EVERYTHING_TASKBAR_NOTIFICATION";
+    // Everything 1.4+ 新协议 QueryW (Unicode/Wide Char 版本)
+    const EVERYTHING_IPC_COPYDATAQUERYW: usize = 2;  // Unicode 查询命令（必须使用 2，不是 0x10001）
     const EVERYTHING_IPC_REPLY: u32 = 2;
     const COPYDATA_QUERYCOMPLETE: u32 = 0x804E;  // 新协议必须使用 0x804E
 
@@ -102,16 +102,23 @@ pub mod windows {
         // 注意：结构体后面紧跟着 UTF-16 字符串，没有额外的对齐
     }
 
-    // Everything IPC 回复结构体（官方协议）
+    // Everything IPC 回复结构体（Everything 1.4.1 兼容版本）
+    // 注意：Everything 1.4.1 在 totitems 和 numitems 之间插入了两个额外的 u32 字段
+    // 导致头部从 8 字节变为 20 字节
     #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
     struct EverythingIpcList {
-        totitems: u32,    // DWORD - 总结果数
-        numitems: u32,    // DWORD - 当前返回的结果数
-        // items[] follows
+        totitems: u32,    // Offset 0  - DWORD - 总结果数
+        unknown1: u32,    // Offset 4  - 未知字段（可能是全库文件数统计）
+        unknown2: u32,    // Offset 8  - 未知字段（可能是全库文件夹数统计）
+        numitems: u32,    // Offset 12 - DWORD - 当前返回的结果数
+        offset: u32,      // Offset 16 - DWORD - 当前结果起始索引
+        // items[] follows at offset 20
     }
 
     // Everything IPC Item 结构体
     #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
     struct EverythingIpcItem {
         flags: u32,              // DWORD
         filename_offset: u32,    // DWORD - 文件名在字符串池中的偏移
@@ -485,80 +492,190 @@ pub mod windows {
     }
 
 
+    /// 安全读取 UTF-16 字符串（从基地址 + 偏移量）
+    unsafe fn read_u16_string_at_offset(base: *const u8, offset: u32, max_len: usize, data_size: u32) -> Option<String> {
+        // 边界检查：确保偏移量在有效范围内
+        if offset as usize >= data_size as usize {
+            log_debug!("[DEBUG] ERROR: offset {} exceeds data size {}", offset, data_size);
+            return None;
+        }
+        
+        // UTF-16 字符串偏移必须是偶数（2 字节对齐）
+        // 如果 offset 是奇数，说明数据无效，直接返回 None
+        if (offset % 2) != 0 {
+            log_debug!("[DEBUG] ERROR: offset {} is not aligned (must be even for UTF-16), skipping", offset);
+            return None;
+        }
+        
+        // 计算字符串指针位置（基地址 + 字节偏移）
+        let str_ptr = base.add(offset as usize) as *const u16;
+        
+        // 读取字符串直到遇到 null 终止符
+        let mut chars = Vec::new();
+        let mut len = 0;
+        
+        // 计算最大可读取的字符数（防止越界）
+        let max_chars = ((data_size as usize - offset as usize) / 2).min(max_len);
+        
+        while len < max_chars {
+            let wchar = *str_ptr.add(len);
+            if wchar == 0 {
+                break;
+            }
+            chars.push(wchar);
+            len += 1;
+        }
+        
+        if !chars.is_empty() {
+            Some(from_wide_string(&chars))
+        } else {
+            None
+        }
+    }
+
     /// 解析 Everything IPC 回复（官方协议）
     fn parse_ipc_reply(cds: &COPYDATASTRUCT) -> Result<Vec<String>, EverythingError> {
         let list_size = std::mem::size_of::<EverythingIpcList>() as u32;
-        eprintln!("[DEBUG] parse_ipc_reply: cbData={}, expected list_size={}", cds.cbData, list_size);
+        log_debug!("[DEBUG] parse_ipc_reply: cbData={}, expected list_size={}", cds.cbData, list_size);
         
         if cds.cbData < list_size {
-            eprintln!("[DEBUG] ERROR: Reply data too short: {} < {}", cds.cbData, list_size);
+            log_debug!("[DEBUG] ERROR: Reply data too short: {} < {}", cds.cbData, list_size);
             return Err(EverythingError::IpcFailed("回复数据太短".to_string()));
         }
 
         unsafe {
-            // 读取 EVERYTHING_IPC_LIST 结构
-            let list = ptr::read(cds.lpData as *const EverythingIpcList);
-            let totitems = list.totitems;
-            let numitems = list.numitems;
-            eprintln!("[DEBUG] Reply structure: totitems={}, numitems={}", totitems, numitems);
-
+            // 先打印原始数据的前64字节，用于诊断
+            let mut raw_data_hex = String::new();
+            for i in 0..64.min(cds.cbData as usize) {
+                if i % 16 == 0 {
+                    raw_data_hex.push_str(&format!("\n[DEBUG]   {:04X}: ", i));
+                }
+                let byte = *(cds.lpData as *const u8).add(i);
+                raw_data_hex.push_str(&format!("{:02X} ", byte));
+            }
+            log_debug!("[DEBUG] First 64 bytes of reply data:{}", raw_data_hex);
+            
+            // 手动解析前几个 u32 值，看看实际数据
+            let bytes = cds.lpData as *const u8;
+            let u32_0 = u32::from_le_bytes([
+                *bytes.add(0), *bytes.add(1), *bytes.add(2), *bytes.add(3)
+            ]);
+            let u32_4 = u32::from_le_bytes([
+                *bytes.add(4), *bytes.add(5), *bytes.add(6), *bytes.add(7)
+            ]);
+            let u32_8 = u32::from_le_bytes([
+                *bytes.add(8), *bytes.add(9), *bytes.add(10), *bytes.add(11)
+            ]);
+            let u32_12 = u32::from_le_bytes([
+                *bytes.add(12), *bytes.add(13), *bytes.add(14), *bytes.add(15)
+            ]);
+            log_debug!("[DEBUG] Raw u32 values: [0]={}, [4]={}, [8]={}, [12]={}", 
+                u32_0, u32_4, u32_8, u32_12);
+            
+            // 读取 EverythingIpcList 结构体（Everything 1.4.1 兼容格式：20 字节头部）
+            let list_ptr = cds.lpData as *const EverythingIpcList;
+            let list = &*list_ptr;
+            
+            let totitems = list.totitems;  // Offset 0
+            let numitems = list.numitems;  // Offset 12 (跳过两个 unknown 字段)
+            let offset = list.offset;      // Offset 16
+            
+            log_debug!("[DEBUG] Header -> TotItems: {}, NumItems: {}, Offset: {}", totitems, numitems, offset);
+            log_debug!("[DEBUG] Header -> Unknown1: {}, Unknown2: {}", list.unknown1, list.unknown2);
+            
+            // 验证读取的值是否合理
+            if numitems > 2000 {
+                log_debug!("[DEBUG] ERROR: NumItems {} is suspicious (>2000), aborting parse.", numitems);
+                log_debug!("[DEBUG] Raw u32 values were: [0]={}, [4]={}, [8]={}, [12]={}", 
+                    u32_0, u32_4, u32_8, u32_12);
+                return Err(EverythingError::IpcFailed(format!(
+                    "结果数量异常: {} (超过合理范围)",
+                    numitems
+                )));
+            }
+            
+            // 如果 totitems 和 numitems 为 0，直接返回空结果
             if numitems == 0 {
-                eprintln!("[DEBUG] numitems is 0, returning empty result");
+                log_debug!("[DEBUG] numitems is 0, returning empty result");
                 return Ok(Vec::new());
             }
-
-            // 计算 items 数组的起始位置
-            let items_ptr = (cds.lpData as *const u8)
-                .add(list_size as usize) as *const EverythingIpcItem;
             
-            eprintln!("[DEBUG] Items array starts at offset: {}", list_size);
+            // 限制处理的 item 数量，防止解析错误导致卡死
+            let items_to_process = numitems.min(1000);
+            if items_to_process < numitems {
+                log_debug!("[DEBUG] WARNING: Limiting items from {} to {} for safety", numitems, items_to_process);
+            }
+            
+            // 计算 Items 起始位置（Everything 1.4.1: Items 数组紧跟在 20 字节的 Header 之后）
+            let items_start_offset = 20;
+            let base_addr = cds.lpData as usize;
+            let items_ptr = (base_addr + items_start_offset) as *const EverythingIpcItem;
+            
+            log_debug!("[DEBUG] Items array starts at offset: {} (0x{:X})", items_start_offset, items_start_offset);
+            
+            // 验证数据大小是否足够容纳所有 items
+            let items_size = (items_to_process as usize) * std::mem::size_of::<EverythingIpcItem>();
+            let min_required_size = items_start_offset + items_size;
+            if cds.cbData < min_required_size as u32 {
+                log_debug!("[DEBUG] ERROR: Reply data too small for {} items: {} < {} bytes", 
+                    items_to_process, cds.cbData, min_required_size);
+                return Err(EverythingError::IpcFailed(format!(
+                    "回复数据大小不足: 需要 {} 字节，实际只有 {} 字节",
+                    min_required_size, cds.cbData
+                )));
+            }
             
             // Everything v1.4.1: offset 字段指向 EVERYTHING_IPC_LIST 基地址的字节偏移
             // filename_offset 和 path_offset 都是相对于 lpData 的偏移
             
             let mut results = Vec::new();
-            let list_base = cds.lpData as *const u8;
             
             // 遍历每个 item
-            for i in 0..numitems {
-                let item = ptr::read(items_ptr.add(i as usize));
+            for i in 0..items_to_process {
+                let current_item_ptr = items_ptr.add(i as usize);
+                
+                // 边界检查：防止读取超出 cbData 范围
+                let item_size = std::mem::size_of::<EverythingIpcItem>();
+                if (current_item_ptr as usize) + item_size > base_addr + cds.cbData as usize {
+                    log_debug!("[DEBUG] Reached end of buffer at item {}, stopping", i);
+                    break;
+                }
+                
+                let item = &*current_item_ptr;
                 let flags = item.flags;
                 let filename_offset = item.filename_offset;
                 let path_offset = item.path_offset;
-                eprintln!("[DEBUG] Item {}: flags={}, filename_offset={}, path_offset={}", 
+                
+                log_debug!("[DEBUG] Item {}: flags={}, filename_offset={}, path_offset={}", 
                     i, flags, filename_offset, path_offset);
                 
-                // path_offset 是相对于 EVERYTHING_IPC_LIST 基地址的字节偏移
-                // 直接使用 offset 值，不需要加上字符串池偏移
-                let path_ptr = list_base.add(path_offset as usize) as *const u16;
-                
-                // 读取 UTF-16 字符串直到遇到 \0
-                let mut path_chars = Vec::new();
-                let mut offset = 0;
-                loop {
-                    let wchar = ptr::read(path_ptr.add(offset));
-                    if wchar == 0 {
-                        break;
+                // 解析字符串（优先使用 path_offset 完整路径）
+                // 注意：offset 必须 > 0、为偶数（UTF-16 需要 2 字节对齐）、且在有效范围内
+                let path_str = if path_offset > 0 
+                    && (path_offset % 2) == 0  // 必须是偶数
+                    && (path_offset as usize) < cds.cbData as usize {
+                    read_u16_string_at_offset(cds.lpData as *const u8, path_offset, 32767, cds.cbData)
+                } else if filename_offset > 0 
+                    && (filename_offset % 2) == 0  // 必须是偶数
+                    && (filename_offset as usize) < cds.cbData as usize {
+                    read_u16_string_at_offset(cds.lpData as *const u8, filename_offset, 32767, cds.cbData)
+                } else {
+                    if path_offset > 0 || filename_offset > 0 {
+                        log_debug!("[DEBUG] WARNING: Item {} has invalid offsets (path_offset={}, filename_offset={}) - offsets must be even and > 0", 
+                            i, path_offset, filename_offset);
                     }
-                    path_chars.push(wchar);
-                    offset += 1;
-                    // 防止无限循环（最多读取 32767 个字符）
-                    if offset > 32767 {
-                        eprintln!("[DEBUG] WARNING: Path string too long, truncating");
-                        break;
-                    }
-                }
+                    None
+                };
                 
-                if !path_chars.is_empty() {
-                    let path = from_wide_string(&path_chars);
-                    eprintln!("[DEBUG] Found result path: {}", path);
+                if let Some(path) = path_str {
+                    log_debug!("[DEBUG] Found result path: {}", path);
                     results.push(path);
                 } else {
-                    eprintln!("[DEBUG] WARNING: Item {} has empty path", i);
+                    log_debug!("[DEBUG] WARNING: Failed to read string for item {}", i);
                 }
             }
 
-            eprintln!("[DEBUG] Total parsed results: {}", results.len());
+            log_debug!("[DEBUG] Total parsed results: {}", results.len());
             Ok(results)
         }
     }
@@ -581,29 +698,19 @@ pub mod windows {
         log_debug!("[DEBUG] Cache expired or empty, searching for Everything window...");
         
         unsafe {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextW, EnumWindows, GetClassNameW};
+            // Everything v1.4 使用 EVERYTHING_TASKBAR_NOTIFICATION 窗口类进行 IPC
+            let class_name = wide_string(EVERYTHING_IPC_WNDCLASS);
+            log_debug!("[DEBUG] Looking for Everything IPC window with class: {}", EVERYTHING_IPC_WNDCLASS);
+            let hwnd = FindWindowW(class_name.as_ptr(), ptr::null());
             
-            // Everything 1.4+ 优先使用主窗口（唯一有效的 IPC 接收窗口）
-            let main_class_name = wide_string("EVERYTHING");
-            log_debug!("[DEBUG] Looking for Everything main window with class: EVERYTHING");
-            let main_hwnd = FindWindowW(main_class_name.as_ptr(), ptr::null());
-            
-            let result = if main_hwnd != 0 {
-                log_debug!("[DEBUG] Everything main window found: {:?} (recommended for IPC)", main_hwnd);
-                Some(main_hwnd)
+            let result = if hwnd != 0 {
+                log_debug!("[DEBUG] Everything IPC window found: {:?}", hwnd);
+                Some(hwnd)
             } else {
-                // 如果类名查找失败，检查旧的窗口类（用于诊断）
-                log_debug!("[DEBUG] Everything main window class 'EVERYTHING' not found");
-                let old_class_name = wide_string("EVERYTHING_TASKBAR_NOTIFICATION");
-                let old_hwnd = FindWindowW(old_class_name.as_ptr(), ptr::null());
-                if old_hwnd != 0 {
-                    log_debug!("[DEBUG] WARNING: Only found old window class (will fail): {:?}", old_hwnd);
-                    log_debug!("[DEBUG] Everything 1.4+ requires main window class 'EVERYTHING' for IPC");
-                    log_debug!("[DEBUG] Please open Everything main window (not just service mode)");
-                } else {
-                    log_debug!("[DEBUG] Everything window NOT found - Everything may not be running");
-                    log_debug!("[DEBUG] Please ensure Everything is running and main window is open");
-                }
+                log_debug!("[DEBUG] Everything IPC window NOT found (FindWindowW returned 0)");
+                let last_error = windows_sys::Win32::Foundation::GetLastError();
+                log_debug!("[DEBUG] Last error: {}", last_error);
+                log_debug!("[DEBUG] Please ensure Everything is running");
                 None
             };
             
@@ -759,13 +866,13 @@ pub mod windows {
 
         // 创建 COPYDATASTRUCT（Everything 1.4+ 使用 QueryW 协议）
         let mut cds = COPYDATASTRUCT {
-            dwData: EVERYTHING_IPC_COPYDATAQUERYW,  // 关键！必须是 0x10001
+            dwData: EVERYTHING_IPC_COPYDATAQUERYW,  // 关键！必须是 2 (EVERYTHING_IPC_COPYDATAQUERYW)
             cbData: struct_size as u32,
             lpData: query_data.as_mut_ptr() as *mut std::ffi::c_void,
         };
         
-        log_debug!("[DEBUG] COPYDATASTRUCT created: dwData={} (0x{:X}, QueryW protocol), cbData={}", 
-            cds.dwData, cds.dwData, cds.cbData);
+        log_debug!("[DEBUG] COPYDATASTRUCT created: dwData={} (EVERYTHING_IPC_COPYDATAQUERYW, QueryW protocol), cbData={}", 
+            cds.dwData, cds.cbData);
         
         // 打印前32字节用于调试（写入日志文件）
         unsafe {
