@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { tauriApi } from "../api/tauri";
-import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem } from "../types";
+import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem, PluginContext } from "../types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { plugins, searchPlugins, executePlugin } from "../plugins";
 
 type SearchResult = {
   type: "app" | "file" | "everything" | "url" | "memo" | "plugin";
@@ -56,6 +57,7 @@ export function LauncherWindow() {
   const [isMemoListMode, setIsMemoListMode] = useState(true);
   const [filteredPlugins, setFilteredPlugins] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [isPluginListModalOpen, setIsPluginListModalOpen] = useState(false);
+  const [openHistory, setOpenHistory] = useState<Record<string, number>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -84,69 +86,7 @@ export function LauncherWindow() {
     setIsEditingMemo(false);
   };
 
-  // 插件列表
-  const plugins = [
-    {
-      id: "show_main_window",
-      name: "录制动作",
-      description: "打开主程序窗口",
-      // 关键词需要同时支持中文、全拼和首字母缩写，方便拼音搜索
-      keywords: [
-        "录制动作",
-        "录制",
-        "主窗口",
-        "主程序",
-        "窗口",
-        "luzhidongzuo",
-        "lzdz",
-        "luzhi",
-        "lz",
-        "zhuchuangkou",
-        "zck",
-        "zhuchengxu",
-        "zcx",
-        "chuangkou",
-        "ck",
-        "main",
-      ],
-    },
-    {
-      id: "memo_center",
-      name: "备忘录",
-      description: "查看和编辑已有的备忘录",
-      keywords: [
-        "备忘录",
-        "beiwanglu",
-        "bwl",
-        "memo",
-        "note",
-        "记录",
-        "jilu",
-        "jl",
-      ],
-    },
-    {
-      id: "show_plugin_list",
-      name: "显示插件列表",
-      description: "查看所有可用插件",
-      keywords: [
-        "显示插件列表",
-        "插件列表",
-        "插件",
-        "列表",
-        "所有插件",
-        "xianshichajianliebiao",
-        "xscjlb",
-        "chajianliebiao",
-        "cjlb",
-        "chajian",
-        "cj",
-        "suoyouchajian",
-        "sycj",
-        "plugin",
-      ],
-    },
-  ];
+  // 插件列表已从 plugins/index.ts 导入
 
   // Check if Everything is available on mount
   useEffect(() => {
@@ -205,6 +145,19 @@ export function LauncherWindow() {
       }
     };
     loadMemos();
+  }, []);
+
+  // Load open history on mount
+  useEffect(() => {
+    const loadOpenHistory = async () => {
+      try {
+        const history = await tauriApi.getOpenHistory();
+        setOpenHistory(history);
+      } catch (error) {
+        console.error("Failed to load open history:", error);
+      }
+    };
+    loadOpenHistory();
   }, []);
 
   // Listen for download progress events
@@ -305,6 +258,43 @@ export function LauncherWindow() {
       });
     });
   }, [isMemoModalOpen, isMemoListMode, selectedMemo, isEditingMemo]);
+
+  // Adjust window size when plugin list modal is shown
+  useEffect(() => {
+    if (!isPluginListModalOpen) return;
+
+    const adjustWindowForPluginListModal = () => {
+      const window = getCurrentWindow();
+      
+      // Get the main container width to maintain consistent width
+      const whiteContainer = document.querySelector('.bg-white');
+      const containerWidth = whiteContainer ? whiteContainer.scrollWidth : 600;
+      // Limit max width to prevent window from being too wide
+      const maxWidth = 600;
+      const targetWidth = Math.min(containerWidth, maxWidth);
+      
+      // Calculate height based on number of plugins
+      // Each plugin card is approximately 120-150px tall (including padding and margins)
+      // Add header (60px) + padding (32px) + some extra space
+      const pluginCount = plugins.length;
+      const estimatedPluginHeight = 140; // Estimated height per plugin card
+      const headerHeight = 60;
+      const padding = 32;
+      const minHeight = 400;
+      const maxHeight = 800;
+      const calculatedHeight = headerHeight + padding + (pluginCount * estimatedPluginHeight) + padding;
+      const targetHeight = Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
+      
+      window.setSize(new LogicalSize(targetWidth, targetHeight)).catch(console.error);
+    };
+
+    // Wait for modal to render, use double requestAnimationFrame for accurate measurement
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(adjustWindowForPluginListModal, 50);
+      });
+    });
+  }, [isPluginListModalOpen]);
 
   // Focus input when window becomes visible and adjust window size
   useEffect(() => {
@@ -484,7 +474,7 @@ export function LauncherWindow() {
       searchApplications(query);
       searchFileHistory(query);
       searchMemos(query);
-      searchPlugins(query);
+      handleSearchPlugins(query);
       if (isEverythingAvailable) {
         console.log("Everything is available, calling searchEverything with query:", query);
         searchEverything(query);
@@ -512,28 +502,22 @@ export function LauncherWindow() {
     }
   };
 
-  const searchPlugins = (q: string) => {
-    const lower = q.toLowerCase();
-    const filtered = plugins.filter(
-      (plugin) =>
-        plugin.name.toLowerCase().includes(lower) ||
-        plugin.description?.toLowerCase().includes(lower) ||
-        plugin.keywords.some((keyword) => keyword.toLowerCase().includes(lower))
-    );
-    setFilteredPlugins(filtered);
+  const handleSearchPlugins = (q: string) => {
+    const filtered = searchPlugins(q);
+    setFilteredPlugins(filtered.map(p => ({ id: p.id, name: p.name, description: p.description })));
   };
 
   // Combine apps, files, Everything results, and URLs into results when they change
   // 使用 useMemo 优化，避免不必要的重新计算
   const combinedResults = useMemo(() => {
-    const results: SearchResult[] = [
-      // URLs first (highest priority when detected)
-      ...detectedUrls.map((url) => ({
-        type: "url" as const,
-        url,
-        displayName: url,
-        path: url,
-      })),
+    const urlResults: SearchResult[] = detectedUrls.map((url) => ({
+      type: "url" as const,
+      url,
+      displayName: url,
+      path: url,
+    }));
+    
+    const otherResults: SearchResult[] = [
       ...filteredApps.map((app) => ({
         type: "app" as const,
         app,
@@ -566,8 +550,19 @@ export function LauncherWindow() {
         path: everything.path,
       })),
     ];
-    return results;
-  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, everythingResults, detectedUrls, displayedResultsCount]);
+    
+    // Sort other results by last opened time (most recent first)
+    // Items with no history will be sorted after items with history
+    otherResults.sort((a, b) => {
+      const aTime = openHistory[a.path] || 0;
+      const bTime = openHistory[b.path] || 0;
+      // Most recent first (descending order)
+      return bTime - aTime;
+    });
+    
+    // URLs always come first, then other results sorted by open history
+    return [...urlResults, ...otherResults];
+  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, everythingResults, detectedUrls, displayedResultsCount, openHistory]);
 
   useEffect(() => {
     // 保存当前滚动位置（如果需要保持）
@@ -1028,6 +1023,18 @@ export function LauncherWindow() {
 
   const handleLaunch = async (result: SearchResult) => {
     try {
+      // Record open history for all types
+      try {
+        await tauriApi.recordOpenHistory(result.path);
+        // Update local state immediately for better UX
+        setOpenHistory(prev => ({
+          ...prev,
+          [result.path]: Date.now() / 1000, // Convert to seconds to match backend
+        }));
+      } catch (error) {
+        console.error("Failed to record open history:", error);
+      }
+
       if (result.type === "url" && result.url) {
         await tauriApi.openUrl(result.url);
       } else if (result.type === "app" && result.app) {
@@ -1049,32 +1056,25 @@ export function LauncherWindow() {
         // 不关闭启动器，让用户查看/编辑备忘录
         return;
       } else if (result.type === "plugin" && result.plugin) {
-        // 处理插件
-        if (result.plugin.id === "show_main_window") {
-          await tauriApi.showMainWindow();
-          // 关闭启动器窗口
-          await tauriApi.hideLauncher();
-          setQuery("");
-          setSelectedIndex(0);
-          return;
-        }
-
-        if (result.plugin.id === "memo_center") {
-          // 打开备忘录中心：列表模式
-          setIsMemoListMode(true);
-          setSelectedMemo(null);
-          setMemoEditTitle("");
-          setMemoEditContent("");
-          setIsEditingMemo(false);
-          setIsMemoModalOpen(true);
-          return;
-        }
-
-        if (result.plugin.id === "show_plugin_list") {
-          // 显示插件列表
-          setIsPluginListModalOpen(true);
-          return;
-        }
+        // 使用插件系统执行插件
+        const pluginContext: PluginContext = {
+          setQuery,
+          setSelectedIndex,
+          hideLauncher: async () => {
+            await tauriApi.hideLauncher();
+          },
+          setIsMemoModalOpen,
+          setIsMemoListMode,
+          setSelectedMemo,
+          setMemoEditTitle,
+          setMemoEditContent,
+          setIsEditingMemo,
+          setIsPluginListModalOpen,
+          tauriApi,
+        };
+        
+        await executePlugin(result.plugin.id, pluginContext);
+        return;
       }
       // Hide launcher window after launch
       await tauriApi.hideLauncher();
@@ -2189,25 +2189,94 @@ export function LauncherWindow() {
                     memos.map((memo) => (
                       <div
                         key={memo.id}
-                        className="p-2 border border-gray-200 rounded cursor-pointer hover:bg-gray-50"
-                        onClick={() => {
-                          // 点击列表项进入单条查看模式
-                          setIsMemoListMode(false);
-                          setSelectedMemo(memo);
-                          setMemoEditTitle(memo.title);
-                          setMemoEditContent(memo.content);
-                          setIsEditingMemo(false);
-                        }}
+                        className="p-2 border border-gray-200 rounded hover:bg-gray-50 group"
                       >
-                        <div className="font-medium truncate">
-                          {memo.title || "(无标题)"}
+                        <div
+                          className="cursor-pointer"
+                          onClick={() => {
+                            // 点击列表项进入单条查看模式
+                            setIsMemoListMode(false);
+                            setSelectedMemo(memo);
+                            setMemoEditTitle(memo.title);
+                            setMemoEditContent(memo.content);
+                            setIsEditingMemo(false);
+                          }}
+                        >
+                          <div className="font-medium truncate">
+                            {memo.title || "(无标题)"}
+                          </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {memo.content ? memo.content.slice(0, 80) : "(无内容)"}
+                            {memo.content && memo.content.length > 80 ? "..." : ""}
+                          </div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">
+                            更新于 {new Date(memo.updated_at * 1000).toLocaleString("zh-CN")}
+                          </div>
                         </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {memo.content ? memo.content.slice(0, 80) : "(无内容)"}
-                          {memo.content && memo.content.length > 80 ? "..." : ""}
-                        </div>
-                        <div className="text-[11px] text-gray-400 mt-0.5">
-                          更新于 {new Date(memo.updated_at * 1000).toLocaleString("zh-CN")}
+                        <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const textToCopy = memo.title || "(无标题)";
+                                await navigator.clipboard.writeText(textToCopy);
+                                // 可以添加一个简单的提示，但为了简洁，这里不添加
+                              } catch (error) {
+                                console.error("Failed to copy to clipboard:", error);
+                                alert(`复制失败: ${error}`);
+                              }
+                            }}
+                            className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded border border-blue-300 hover:border-blue-400 transition-colors"
+                            title="复制标题"
+                          >
+                            复制
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const textToCopy = memo.title || "(无标题)";
+                                await navigator.clipboard.writeText(textToCopy);
+                                // 复制成功后关闭启动器
+                                await tauriApi.hideLauncher();
+                                setQuery("");
+                                setSelectedIndex(0);
+                                resetMemoState();
+                              } catch (error) {
+                                console.error("Failed to copy to clipboard:", error);
+                                alert(`复制失败: ${error}`);
+                              }
+                            }}
+                            className="px-2 py-1 text-xs text-green-600 hover:text-green-800 hover:bg-green-50 rounded border border-green-300 hover:border-green-400 transition-colors"
+                            title="复制标题并关闭"
+                          >
+                            复制并关闭
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!confirm("确定要删除这条备忘录吗？")) {
+                                return;
+                              }
+                              try {
+                                await tauriApi.deleteMemo(memo.id);
+                                const list = await tauriApi.getAllMemos();
+                                setMemos(list);
+                                // 如果删除的是当前显示的备忘录，关闭弹窗
+                                if (selectedMemo?.id === memo.id) {
+                                  setIsMemoModalOpen(false);
+                                  setSelectedMemo(null);
+                                }
+                              } catch (error) {
+                                console.error("Failed to delete memo:", error);
+                                alert(`删除备忘录失败: ${error}`);
+                              }
+                            }}
+                            className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-300 hover:border-red-400 transition-colors"
+                            title="删除备忘录"
+                          >
+                            删除
+                          </button>
                         </div>
                       </div>
                     ))
@@ -2372,9 +2441,9 @@ export function LauncherWindow() {
       {/* Plugin List Modal */}
       {isPluginListModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[600px] max-h-[80vh] flex flex-col m-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl flex flex-col m-4" style={{ maxHeight: '90vh' }}>
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 flex-shrink-0">
               <h2 className="text-lg font-semibold text-gray-800">插件列表</h2>
               <button
                 onClick={() => {
@@ -2387,7 +2456,7 @@ export function LauncherWindow() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 min-h-0">
               <div className="space-y-3">
                 {plugins.map((plugin) => (
                   <div

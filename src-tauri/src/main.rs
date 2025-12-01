@@ -10,6 +10,7 @@ mod hooks;
 mod hotkey;
 mod hotkey_handler;
 mod memos;
+mod open_history;
 mod recording;
 mod replay;
 mod shortcuts;
@@ -188,6 +189,7 @@ fn main() {
             // Load file history on startup
             let app_data_dir = get_app_data_dir(app.handle())?;
             file_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
+            open_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
             shortcuts::load_shortcuts(&app_data_dir).ok(); // Ignore errors if file doesn't exist
 
             // Initialize Everything log file on startup to ensure path is displayed
@@ -262,6 +264,8 @@ fn main() {
             show_shortcuts_config,
             show_main_window,
             open_url,
+            record_open_history,
+            get_open_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

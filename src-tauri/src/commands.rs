@@ -3,6 +3,7 @@ use crate::everything_search;
 use crate::file_history;
 use crate::hooks;
 use crate::memos;
+use crate::open_history;
 use crate::recording::{RecordingMeta, RecordingState};
 use crate::replay::ReplayState;
 use crate::shortcuts;
@@ -1766,4 +1767,16 @@ pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
         window.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn record_open_history(key: String, app: tauri::AppHandle) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    open_history::record_open(key, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn get_open_history(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, u64>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    open_history::get_all_history(&app_data_dir)
 }

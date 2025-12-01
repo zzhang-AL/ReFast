@@ -76,3 +76,31 @@ export interface MemoItem {
   updated_at: number;
 }
 
+// 插件系统类型定义
+export interface PluginContext {
+  // 可以传递给插件执行函数的上下文信息
+  setQuery: (query: string) => void;
+  setSelectedIndex: (index: number) => void;
+  hideLauncher: () => Promise<void>;
+  // 备忘录相关状态设置函数
+  setIsMemoModalOpen?: (open: boolean) => void;
+  setIsMemoListMode?: (mode: boolean) => void;
+  setSelectedMemo?: (memo: MemoItem | null) => void;
+  setMemoEditTitle?: (title: string) => void;
+  setMemoEditContent?: (content: string) => void;
+  setIsEditingMemo?: (editing: boolean) => void;
+  // 插件列表相关状态
+  setIsPluginListModalOpen?: (open: boolean) => void;
+  // Tauri API
+  tauriApi?: any;
+}
+
+export interface Plugin {
+  id: string;
+  name: string;
+  description?: string;
+  keywords: string[];
+  // 执行函数：插件被触发时调用
+  execute: (context: PluginContext) => Promise<void> | void;
+}
+

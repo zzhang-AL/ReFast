@@ -202,5 +202,14 @@ export const tauriApi = {
   async showMainWindow(): Promise<void> {
     return invoke("show_main_window");
   },
+
+  // Open history APIs
+  async recordOpenHistory(key: string): Promise<void> {
+    return invoke("record_open_history", { key });
+  },
+
+  async getOpenHistory(): Promise<Record<string, number>> {
+    return invoke("get_open_history");
+  },
 };
 
