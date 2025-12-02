@@ -22,8 +22,110 @@ use tauri::{
     menu::{Menu, MenuItem},
     Manager,
 };
+use std::sync::{Arc, Mutex};
+
+// 全局锁文件句柄，确保文件在程序运行期间保持打开
+static LOCK_FILE: Mutex<Option<Arc<std::fs::File>>> = Mutex::new(None);
+
+/// 检查是否已经有实例在运行
+/// 返回 true 表示这是第一个实例，可以继续运行
+/// 返回 false 表示已有实例在运行，应该退出
+fn check_single_instance() -> bool {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::PathBuf;
+    
+    // 获取锁文件路径
+    let lock_file_path = get_lock_file_path();
+    
+    // 确保目录存在
+    if let Some(parent) = lock_file_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    
+    // 检查文件是否存在且包含有效的进程 ID
+    if lock_file_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&lock_file_path) {
+            if let Ok(pid) = contents.trim().parse::<u32>() {
+                // 检查进程是否还在运行
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
+                    use windows_sys::Win32::Foundation::CloseHandle;
+                    
+                    unsafe {
+                        let handle = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
+                        if handle != 0 {
+                            CloseHandle(handle);
+                            // 进程还在运行
+                            eprintln!("Another instance of ReFast is already running (PID: {}).", pid);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        // 文件存在但内容无效，可能是之前的实例异常退出，删除旧文件
+        let _ = std::fs::remove_file(&lock_file_path);
+    }
+    
+    // 尝试创建锁文件（独占模式）
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_file_path)
+    {
+        Ok(mut file) => {
+            // 写入当前进程 ID
+            let _ = writeln!(file, "{}", std::process::id());
+            let _ = file.flush();
+            // 保存文件句柄，确保它在程序运行期间保持打开
+            if let Ok(mut lock_guard) = LOCK_FILE.lock() {
+                *lock_guard = Some(Arc::new(file));
+            }
+            true
+        }
+        Err(_) => {
+            // 无法创建文件，可能是另一个实例正在运行
+            eprintln!("Another instance of ReFast is already running.");
+            false
+        }
+    }
+}
+
+fn get_lock_file_path() -> std::path::PathBuf {
+    use std::env;
+    use std::path::PathBuf;
+    
+    // 使用临时目录或应用数据目录
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = env::var("APPDATA") {
+            return PathBuf::from(appdata).join("ReFast").join("re-fast.lock");
+        }
+    }
+    
+    // 回退到临时目录
+    env::temp_dir().join("re-fast.lock")
+}
+
+/// 清理锁文件
+fn cleanup_lock_file() {
+    // 释放文件句柄
+    if let Ok(mut lock_guard) = LOCK_FILE.lock() {
+        *lock_guard = None;
+    }
+    // 删除锁文件
+    let lock_file_path = get_lock_file_path();
+    let _ = std::fs::remove_file(&lock_file_path);
+}
 
 fn main() {
+    // 检查单实例
+    if !check_single_instance() {
+        // 已有实例在运行，退出
+        std::process::exit(0);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -134,6 +236,8 @@ fn main() {
                         app.restart();
                     }
                     "quit" => {
+                        // 清理锁文件
+                        cleanup_lock_file();
                         app.exit(0);
                     }
                     _ => {}
