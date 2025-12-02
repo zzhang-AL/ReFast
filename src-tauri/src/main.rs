@@ -162,13 +162,18 @@ fn main() {
             let show_launcher =
                 MenuItem::with_id(app, "show_launcher", "显示启动器", true, None::<&str>)?;
             let open_logs = MenuItem::with_id(app, "open_logs", "打开日志文件夹", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启程序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-            let menu = Menu::with_items(app, &[&show_launcher, &open_logs, &restart, &quit])?;
+            let menu = Menu::with_items(app, &[&show_launcher, &open_logs, &restart, &about, &quit])?;
 
             // Create tray icon - use default window icon (which loads from tauri.conf.json)
-            let mut tray_builder = TrayIconBuilder::new().menu(&menu).tooltip("ReFast");
+            // 禁用左键点击显示菜单，左键只用于切换启动器窗口
+            let mut tray_builder = TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("ReFast")
+                .show_menu_on_left_click(false);
 
             // Use default window icon (loaded from tauri.conf.json icons/icon.ico)
             // This is the simplest and most reliable way to load the icon
@@ -260,6 +265,41 @@ fn main() {
                                         .spawn();
                                 }
                             }
+                        }
+                    }
+                    "about" => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                MessageBoxW, MB_ICONINFORMATION, MB_OK,
+                            };
+                            use std::ffi::OsStr;
+                            use std::os::windows::ffi::OsStrExt;
+
+                            // 将字符串转换为宽字符
+                            fn to_wide_string(s: &str) -> Vec<u16> {
+                                OsStr::new(s)
+                                    .encode_wide()
+                                    .chain(std::iter::once(0))
+                                    .collect()
+                            }
+
+                            let title = to_wide_string("关于 ReFast");
+                            let message = to_wide_string("ReFast\n\n一个快速启动器和输入宏录制工具\n\n版本: 0.1.0");
+
+                            unsafe {
+                                MessageBoxW(
+                                    0,
+                                    message.as_ptr(),
+                                    title.as_ptr(),
+                                    MB_OK | MB_ICONINFORMATION,
+                                );
+                            }
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            // 其他平台可以使用其他方式显示关于对话框
+                            eprintln!("ReFast - 一个快速启动器和输入宏录制工具\n版本: 0.1.0");
                         }
                     }
                     "restart" => {
