@@ -847,6 +847,9 @@ export function LauncherWindow() {
       path: "json://formatter",
     }] : [];
     
+    // 检查 JSON 中是否包含链接
+    const jsonContainsLinks = detectedJson ? extractUrls(detectedJson).length > 0 : false;
+    
     // 检查是否应该显示"历史访问"结果（只在明确搜索相关关键词时显示）
     const lowerQuery = query.toLowerCase().trim();
     const historyKeywords = ["历史访问", "历史", "访问历史", "ls", "history"];
@@ -917,8 +920,13 @@ export function LauncherWindow() {
       return bTime - aTime;
     });
     
-    // URLs always come first, then JSON formatter, then other results sorted by open history
-    return [...urlResults, ...jsonFormatterResult, ...otherResults];
+    // 如果 JSON 中包含链接，优先显示 JSON 格式化选项，否则按原来的顺序（URLs -> JSON formatter -> other results）
+    if (jsonContainsLinks && jsonFormatterResult.length > 0) {
+      return [...jsonFormatterResult, ...urlResults, ...otherResults];
+    } else {
+      // URLs always come first, then JSON formatter, then other results sorted by open history
+      return [...urlResults, ...jsonFormatterResult, ...otherResults];
+    }
   }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, systemFolders, everythingResults, detectedUrls, detectedJson, openHistory, query, aiAnswer]);
 
   // 使用 ref 来跟踪当前的 query，避免闭包问题

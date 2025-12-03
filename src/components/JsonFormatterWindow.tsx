@@ -128,7 +128,10 @@ export function JsonFormatterWindow() {
 
   // 格式化 JSON
   const handleFormat = () => {
-    if (!input.trim()) {
+    // 根据当前模式选择数据源
+    const content = mode === "single" ? singleModeInput : input;
+    
+    if (!content.trim()) {
       setError("请输入 JSON 内容");
       setFormatted("");
       setParsedData(null);
@@ -136,11 +139,17 @@ export function JsonFormatterWindow() {
     }
 
     try {
-      const parsed = JSON.parse(input);
+      const parsed = JSON.parse(content);
       const formattedJson = JSON.stringify(parsed, null, indent);
       setFormatted(formattedJson);
       setParsedData(parsed);
       setError(null);
+      
+      // 如果是单框模式，更新编辑器内容
+      if (mode === "single") {
+        setSingleModeInput(formattedJson);
+      }
+      
       // 格式化时展开所有节点
       shouldPreserveExpandedRef.current = true;
       const allPaths = getAllPaths(parsed, "");
@@ -197,7 +206,16 @@ export function JsonFormatterWindow() {
   // 展开所有
   const expandAll = () => {
     shouldPreserveExpandedRef.current = true; // 标记用户已手动调整展开状态
-    if (parsedData) {
+    
+    // 如果是单框模式且 Monaco Editor 已初始化，使用 Monaco Editor 的展开功能
+    if (mode === "single" && monacoEditorRef.current) {
+      const editor = monacoEditorRef.current;
+      const unfoldAllAction = editor.getAction('editor.unfoldAll');
+      if (unfoldAllAction) {
+        unfoldAllAction.run();
+      }
+    } else if (parsedData) {
+      // 分栏模式：使用树形视图的展开功能
       const allPaths = getAllPaths(parsedData, "");
       setExpandedPaths(new Set(allPaths));
     }
@@ -206,13 +224,53 @@ export function JsonFormatterWindow() {
   // 折叠所有（只展开根节点）
   const collapseAll = () => {
     shouldPreserveExpandedRef.current = true; // 标记用户已手动调整展开状态
-    // 只保留根节点（空字符串路径）展开
-    setExpandedPaths(new Set([""]));
+    
+    // 如果是单框模式且 Monaco Editor 已初始化，使用 Monaco Editor 的折叠功能
+    if (mode === "single" && monacoEditorRef.current) {
+      const editor = monacoEditorRef.current;
+      const model = editor.getModel();
+      
+      if (model) {
+        // 优化方法：使用 batch 操作减少闪烁
+        // 先移动到第一行
+        editor.setPosition({ lineNumber: 1, column: 1 });
+        
+        // 尝试使用 foldLevel2 action（折叠第二层及以下，保持根层级展开）
+        const foldLevel2Action = editor.getAction('editor.foldLevel2');
+        if (foldLevel2Action && foldLevel2Action.isSupported()) {
+          // 如果支持 foldLevel2，直接使用，不会有闪烁
+          foldLevel2Action.run();
+        } else {
+          // 备用方案：使用编辑器的事务机制，在同一个更新周期内完成
+          // 先折叠所有，然后立即展开根层级，减少视觉闪烁
+          const foldAllAction = editor.getAction('editor.foldAll');
+          if (foldAllAction) {
+            // 使用 Promise 链，但减少延迟
+            foldAllAction.run().then(() => {
+              // 使用微任务而不是 setTimeout，更快执行
+              Promise.resolve().then(() => {
+                editor.setPosition({ lineNumber: 1, column: 1 });
+                const unfoldAction = editor.getAction('editor.unfold');
+                if (unfoldAction) {
+                  unfoldAction.run();
+                }
+              });
+            });
+          }
+        }
+      }
+    } else {
+      // 分栏模式：只保留根节点（空字符串路径）展开
+      setExpandedPaths(new Set([""]));
+    }
   };
 
   // 压缩 JSON
   const handleMinify = () => {
-    if (!input.trim()) {
+    // 根据当前模式选择数据源
+    const content = mode === "single" ? singleModeInput : input;
+    
+    if (!content.trim()) {
       setError("请输入 JSON 内容");
       setFormatted("");
       setParsedData(null);
@@ -220,13 +278,18 @@ export function JsonFormatterWindow() {
     }
 
     try {
-      const parsed = JSON.parse(input);
+      const parsed = JSON.parse(content);
       const minified = JSON.stringify(parsed);
       setFormatted(minified);
       // 压缩模式下不显示树形视图，只显示文本
       setParsedData(null);
       setError(null);
       setExpandedPaths(new Set());
+      
+      // 如果是单框模式，更新编辑器内容
+      if (mode === "single") {
+        setSingleModeInput(minified);
+      }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "JSON 格式错误";
       setError(errorMessage);
@@ -237,12 +300,20 @@ export function JsonFormatterWindow() {
 
   // 复制到剪贴板
   const handleCopy = async () => {
-    // 如果有解析的数据，复制格式化后的文本；否则复制 formatted
-    const textToCopy = parsedData 
-      ? JSON.stringify(parsedData, null, indent)
-      : formatted;
+    // 根据当前模式选择数据源
+    let textToCopy: string;
     
-    if (!textToCopy) return;
+    if (mode === "single") {
+      // 单框模式：优先使用编辑器内容，否则使用格式化后的内容
+      textToCopy = singleModeInput || formatted || "";
+    } else {
+      // 分栏模式：如果有解析的数据，复制格式化后的文本；否则复制 formatted
+      textToCopy = parsedData 
+        ? JSON.stringify(parsedData, null, indent)
+        : formatted || "";
+    }
+    
+    if (!textToCopy.trim()) return;
 
     try {
       await navigator.clipboard.writeText(textToCopy);
@@ -586,24 +657,24 @@ export function JsonFormatterWindow() {
         </button>
         <button
           onClick={expandAll}
-          disabled={!parsedData}
+          disabled={mode === "single" ? !singleModeInput.trim() : !parsedData}
           style={{
             padding: "8px 16px",
-            backgroundColor: parsedData ? "#f59e0b" : "#9ca3af",
+            backgroundColor: (mode === "single" ? singleModeInput.trim() : parsedData) ? "#f59e0b" : "#9ca3af",
             color: "white",
             border: "none",
             borderRadius: "6px",
-            cursor: parsedData ? "pointer" : "not-allowed",
+            cursor: (mode === "single" ? singleModeInput.trim() : parsedData) ? "pointer" : "not-allowed",
             fontSize: "14px",
             fontWeight: 500,
           }}
           onMouseOver={(e) => {
-            if (parsedData) {
+            if (mode === "single" ? singleModeInput.trim() : parsedData) {
               e.currentTarget.style.backgroundColor = "#d97706";
             }
           }}
           onMouseOut={(e) => {
-            if (parsedData) {
+            if (mode === "single" ? singleModeInput.trim() : parsedData) {
               e.currentTarget.style.backgroundColor = "#f59e0b";
             }
           }}
@@ -612,24 +683,24 @@ export function JsonFormatterWindow() {
         </button>
         <button
           onClick={collapseAll}
-          disabled={!parsedData}
+          disabled={mode === "single" ? !singleModeInput.trim() : !parsedData}
           style={{
             padding: "8px 16px",
-            backgroundColor: parsedData ? "#f59e0b" : "#9ca3af",
+            backgroundColor: (mode === "single" ? singleModeInput.trim() : parsedData) ? "#f59e0b" : "#9ca3af",
             color: "white",
             border: "none",
             borderRadius: "6px",
-            cursor: parsedData ? "pointer" : "not-allowed",
+            cursor: (mode === "single" ? singleModeInput.trim() : parsedData) ? "pointer" : "not-allowed",
             fontSize: "14px",
             fontWeight: 500,
           }}
           onMouseOver={(e) => {
-            if (parsedData) {
+            if (mode === "single" ? singleModeInput.trim() : parsedData) {
               e.currentTarget.style.backgroundColor = "#d97706";
             }
           }}
           onMouseOut={(e) => {
-            if (parsedData) {
+            if (mode === "single" ? singleModeInput.trim() : parsedData) {
               e.currentTarget.style.backgroundColor = "#f59e0b";
             }
           }}
