@@ -1,6 +1,6 @@
 {
   "productName": "ReFast",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "identifier": "com.re-fast.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -45,7 +45,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": [
+      "msi"
+    ],
     "icon": [
       "icons/icon.ico"
     ],
@@ -56,4 +58,3 @@
     }
   }
 }
-
