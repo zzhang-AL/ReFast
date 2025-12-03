@@ -324,6 +324,76 @@ export function JsonFormatterWindow() {
     }
   };
 
+  // 转义/反转义 JSON 字符串
+  const handleEscape = () => {
+    // 根据当前模式选择数据源
+    const content = mode === "single" ? singleModeInput : input;
+    
+    if (!content.trim()) {
+      setError("请输入内容");
+      return;
+    }
+
+    try {
+      let result: string;
+      
+      // 检测内容是否已经是转义格式（包含转义字符）
+      // 简单判断：如果包含 \" 或 \\ 等转义序列，可能是已转义的
+      const hasEscapeSequences = /\\["\\/bfnrt]|\\u[0-9a-fA-F]{4}/.test(content);
+      
+      if (hasEscapeSequences) {
+        // 反转义：将转义字符还原
+        // 使用 JSON.parse 来解析转义的字符串
+        try {
+          // 如果内容是一个完整的 JSON 字符串（被双引号包裹），直接解析
+          if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+            result = JSON.parse(content);
+          } else {
+            // 否则，尝试将整个内容作为 JSON 字符串解析
+            result = JSON.parse(`"${content}"`);
+          }
+        } catch (e) {
+          // 如果解析失败，尝试手动反转义
+          result = content
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\')
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\t/g, '\t')
+            .replace(/\\b/g, '\b')
+            .replace(/\\f/g, '\f')
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        }
+      } else {
+        // 转义：将特殊字符转义
+        // 使用 JSON.stringify 来转义字符串
+        result = JSON.stringify(content);
+        // 移除首尾的引号（因为 JSON.stringify 会给字符串加上引号）
+        if (result.startsWith('"') && result.endsWith('"')) {
+          result = result.slice(1, -1);
+        }
+      }
+      
+      // 更新内容
+      if (mode === "single") {
+        setSingleModeInput(result);
+        // 清除错误和格式化状态
+        setError(null);
+        setFormatted("");
+        setParsedData(null);
+      } else {
+        setInput(result);
+        // 清除错误和格式化状态
+        setError(null);
+        setFormatted("");
+        setParsedData(null);
+      }
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : "转义/反转义失败";
+      setError(errorMessage);
+    }
+  };
+
   // 清空
   const handleClear = () => {
     setInput("");
@@ -631,29 +701,55 @@ export function JsonFormatterWindow() {
         </button>
         <button
           onClick={handleCopy}
-          disabled={!formatted && !parsedData}
+          disabled={!formatted && !parsedData && !singleModeInput.trim()}
           style={{
             padding: "8px 16px",
-            backgroundColor: (formatted || parsedData) ? "#6366f1" : "#9ca3af",
+            backgroundColor: (formatted || parsedData || singleModeInput.trim()) ? "#6366f1" : "#9ca3af",
             color: "white",
             border: "none",
             borderRadius: "6px",
-            cursor: (formatted || parsedData) ? "pointer" : "not-allowed",
+            cursor: (formatted || parsedData || singleModeInput.trim()) ? "pointer" : "not-allowed",
             fontSize: "14px",
             fontWeight: 500,
           }}
           onMouseOver={(e) => {
-            if (formatted || parsedData) {
+            if (formatted || parsedData || singleModeInput.trim()) {
               e.currentTarget.style.backgroundColor = "#4f46e5";
             }
           }}
           onMouseOut={(e) => {
-            if (formatted || parsedData) {
+            if (formatted || parsedData || singleModeInput.trim()) {
               e.currentTarget.style.backgroundColor = "#6366f1";
             }
           }}
         >
           复制结果
+        </button>
+        <button
+          onClick={handleEscape}
+          disabled={mode === "single" ? !singleModeInput.trim() : !input.trim()}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: (mode === "single" ? singleModeInput.trim() : input.trim()) ? "#8b5cf6" : "#9ca3af",
+            color: "white",
+            border: "none",
+            borderRadius: "6px",
+            cursor: (mode === "single" ? singleModeInput.trim() : input.trim()) ? "pointer" : "not-allowed",
+            fontSize: "14px",
+            fontWeight: 500,
+          }}
+          onMouseOver={(e) => {
+            if (mode === "single" ? singleModeInput.trim() : input.trim()) {
+              e.currentTarget.style.backgroundColor = "#7c3aed";
+            }
+          }}
+          onMouseOut={(e) => {
+            if (mode === "single" ? singleModeInput.trim() : input.trim()) {
+              e.currentTarget.style.backgroundColor = "#8b5cf6";
+            }
+          }}
+        >
+          转义/反转义
         </button>
         <button
           onClick={expandAll}
