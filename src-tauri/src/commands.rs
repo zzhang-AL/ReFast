@@ -1004,12 +1004,35 @@ pub fn get_everything_log_file_path() -> Result<Option<String>, String> {
 pub fn open_everything_download() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        
         // Open Everything download page in default browser
         let url = "https://www.voidtools.com/downloads/";
-        std::process::Command::new("cmd")
-            .args(&["/C", "start", "", url])
-            .spawn()
-            .map_err(|e| format!("Failed to open download page: {}", e))?;
+        
+        // Convert URL to wide string (UTF-16) for Windows API
+        let url_wide: Vec<u16> = OsStr::new(url)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        
+        // Use ShellExecuteW to open URL in default browser without showing command prompt
+        let result = unsafe {
+            ShellExecuteW(
+                0, // hwnd - no parent window
+                std::ptr::null(), // lpOperation - NULL means "open"
+                url_wide.as_ptr(), // lpFile - URL
+                std::ptr::null(), // lpParameters
+                std::ptr::null(), // lpDirectory
+                1, // nShowCmd - SW_SHOWNORMAL (1)
+            )
+        };
+        
+        // ShellExecuteW returns a value > 32 on success
+        if result as i32 <= 32 {
+            return Err(format!("Failed to open download page: {} (error code: {})", url, result as i32));
+        }
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
@@ -1687,11 +1710,32 @@ pub fn delete_shortcut(id: String, app: tauri::AppHandle) -> Result<(), String> 
 pub fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // Open URL in default browser on Windows
-        std::process::Command::new("cmd")
-            .args(&["/C", "start", "", &url])
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        
+        // Convert URL to wide string (UTF-16) for Windows API
+        let url_wide: Vec<u16> = OsStr::new(&url)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        
+        // Use ShellExecuteW to open URL in default browser without showing command prompt
+        let result = unsafe {
+            ShellExecuteW(
+                0, // hwnd - no parent window
+                std::ptr::null(), // lpOperation - NULL means "open"
+                url_wide.as_ptr(), // lpFile - URL
+                std::ptr::null(), // lpParameters
+                std::ptr::null(), // lpDirectory
+                1, // nShowCmd - SW_SHOWNORMAL (1)
+            )
+        };
+        
+        // ShellExecuteW returns a value > 32 on success
+        if result as i32 <= 32 {
+            return Err(format!("Failed to open URL: {} (error code: {})", url, result as i32));
+        }
         Ok(())
     }
     #[cfg(target_os = "macos")]

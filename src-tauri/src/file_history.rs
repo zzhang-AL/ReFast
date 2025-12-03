@@ -371,12 +371,14 @@ pub fn update_file_history_name(
 }
 
 pub fn launch_file(path: &str) -> Result<(), String> {
-    use std::process::Command;
-
     let trimmed = path.trim();
     
     #[cfg(target_os = "windows")]
     {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        
         // Check if this is a CLSID path (virtual folder like Recycle Bin)
         // CLSID paths start with "::"
         let is_clsid_path = trimmed.starts_with("::");
@@ -400,15 +402,33 @@ pub fn launch_file(path: &str) -> Result<(), String> {
         
         eprintln!("[DEBUG] launch_file: opening path '{}' (is_clsid: {})", path_str, is_clsid_path);
         
-        // On Windows, use `start` command to open files/folders with their default application
-        Command::new("cmd")
-            .args(&["/C", "start", "", &path_str])
-            .spawn()
-            .map_err(|e| format!("Failed to launch path: {}", e))?;
+        // Convert string to wide string (UTF-16) for Windows API
+        let path_wide: Vec<u16> = OsStr::new(&path_str)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        
+        // Use ShellExecuteW to open file/folder without showing command prompt
+        let result = unsafe {
+            ShellExecuteW(
+                0, // hwnd - no parent window
+                std::ptr::null(), // lpOperation - NULL means "open"
+                path_wide.as_ptr(), // lpFile
+                std::ptr::null(), // lpParameters
+                std::ptr::null(), // lpDirectory
+                1, // nShowCmd - SW_SHOWNORMAL (1)
+            )
+        };
+        
+        // ShellExecuteW returns a value > 32 on success
+        if result as i32 <= 32 {
+            return Err(format!("Failed to open path: {} (error code: {})", path_str, result as i32));
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        use std::process::Command;
         // On Unix-like systems, use xdg-open
         Command::new("xdg-open")
             .arg(path)

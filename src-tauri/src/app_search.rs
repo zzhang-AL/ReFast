@@ -673,31 +673,41 @@ public class IconExtractor {
     }
 
     pub fn launch_app(app: &AppInfo) -> Result<(), String> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        
         let path = Path::new(&app.path);
 
-        // If it's a .lnk file, use Windows shell to open it
-        if path.extension().and_then(|s| s.to_str()) == Some("lnk") {
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                // Use cmd /c start to properly handle .lnk files
-                Command::new("cmd")
-                    .args(&["/c", "start", "", &app.path])
-                    .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch application: {}", e))?;
-                return Ok(());
-            }
-        }
-
-        if !path.exists() {
+        // Check if path exists (for non-lnk files)
+        let is_lnk = path.extension().and_then(|s| s.to_str()) == Some("lnk");
+        if !is_lnk && !path.exists() {
             return Err(format!("Application not found: {}", app.path));
         }
 
-        // Use Windows ShellExecute or Command
-        Command::new(&app.path)
-            .spawn()
-            .map_err(|e| format!("Failed to launch application: {}", e))?;
+        // Convert path to wide string (UTF-16) for Windows API
+        let path_wide: Vec<u16> = OsStr::new(&app.path)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        
+        // Use ShellExecuteW to open application without showing command prompt
+        // This works for .exe, .lnk, and other executable types
+        let result = unsafe {
+            ShellExecuteW(
+                0, // hwnd - no parent window
+                std::ptr::null(), // lpOperation - NULL means "open"
+                path_wide.as_ptr(), // lpFile
+                std::ptr::null(), // lpParameters
+                std::ptr::null(), // lpDirectory
+                1, // nShowCmd - SW_SHOWNORMAL (1)
+            )
+        };
+        
+        // ShellExecuteW returns a value > 32 on success
+        if result as i32 <= 32 {
+            return Err(format!("Failed to launch application: {} (error code: {})", app.path, result as i32));
+        }
 
         Ok(())
     }
