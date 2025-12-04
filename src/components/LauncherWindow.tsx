@@ -1160,6 +1160,52 @@ export function LauncherWindow() {
       })),
     ];
     
+    // 对结果进行去重：如果同一个路径出现在多个结果源中，只保留一个
+    // 优先保留 Everything 结果（因为它是实时搜索的，更准确）
+    // 先收集 Everything 结果的路径集合
+    const everythingPaths = new Set<string>();
+    for (const result of otherResults) {
+      if (result.type === "everything") {
+        const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+        everythingPaths.add(normalizedPath);
+      }
+    }
+    
+    // 过滤掉历史文件结果中与 Everything 结果重复的路径
+    const deduplicatedResults: SearchResult[] = [];
+    for (const result of otherResults) {
+      // 对于特殊类型（AI、历史、设置等）和 URL，不需要去重
+      if (result.type === "ai" || result.type === "history" || result.type === "settings" || result.type === "url" || result.type === "json_formatter" || result.type === "plugin") {
+        deduplicatedResults.push(result);
+        continue;
+      }
+      
+      // 对于 Everything 类型，直接添加
+      if (result.type === "everything") {
+        deduplicatedResults.push(result);
+        continue;
+      }
+      
+      // 对于历史文件类型，检查是否已在 Everything 结果中
+      if (result.type === "file") {
+        const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+        if (!everythingPaths.has(normalizedPath)) {
+          deduplicatedResults.push(result);
+        }
+        // 如果路径已在 Everything 结果中，跳过（不添加历史文件结果）
+        continue;
+      }
+      
+      // 对于其他类型（app、system_folder 等），检查路径是否重复
+      const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+      if (!everythingPaths.has(normalizedPath)) {
+        deduplicatedResults.push(result);
+      }
+    }
+    
+    // 使用去重后的结果
+    otherResults = deduplicatedResults;
+    
     // 使用相关性评分系统对所有结果进行排序
     // 性能优化：当结果数量过多时，只对前1000条进行排序，避免对大量结果排序造成卡顿
     const MAX_SORT_COUNT = 1000;
@@ -1776,6 +1822,13 @@ export function LauncherWindow() {
           return;
         }
 
+        // 如果已经收到最终结果，忽略批次事件（防止重复添加）
+        // 因为批次事件和最终结果包含相同的数据，如果最终结果已经设置，批次事件就是重复的
+        if (finalResultsSetRef.current) {
+          console.log("[DEBUG] Ignoring batch event because final results already set");
+          return;
+        }
+
         // 如果当前 query 为空，忽略批次结果（防止在清空搜索后仍显示结果）
         // 使用函数式更新来获取最新的 query 值
         setEverythingResults((prev) => {
@@ -1911,9 +1964,13 @@ export function LauncherWindow() {
           currentSearchRef.current.query === searchQuery) {
         // 用最终结果覆盖批次累积的结果，因为最终结果才是后端实际返回的准确结果
         // 批次事件中的 total_count 是 Everything 找到的总数，可能远大于后端实际返回的结果数
-        setEverythingResults(response.results);
+        // 对结果进行去重，基于路径（path）字段，防止重复显示
+        const uniqueResults = response.results.filter((result, index, self) =>
+          index === self.findIndex((r) => r.path === result.path)
+        );
+        setEverythingResults(uniqueResults);
         setEverythingTotalCount(response.total_count);
-        setEverythingCurrentCount(response.results.length);
+        setEverythingCurrentCount(uniqueResults.length);
       } else {
         // Query 已改变，清空结果
         setEverythingResults([]);
