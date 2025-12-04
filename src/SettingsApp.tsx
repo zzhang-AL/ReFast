@@ -9,6 +9,7 @@ interface Settings {
     model: string;
     base_url: string;
   };
+  startup_enabled?: boolean;
 }
 
 function SettingsApp() {
@@ -17,6 +18,7 @@ function SettingsApp() {
       model: "llama2",
       base_url: "http://localhost:11434",
     },
+    startup_enabled: false,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -28,7 +30,12 @@ function SettingsApp() {
     try {
       setIsLoading(true);
       const data = await tauriApi.getSettings();
-      setSettings(data);
+      // 同步开机启动状态
+      const startupEnabled = await tauriApi.isStartupEnabled();
+      setSettings({
+        ...data,
+        startup_enabled: startupEnabled,
+      });
     } catch (error) {
       console.error("Failed to load settings:", error);
     } finally {
@@ -41,6 +48,10 @@ function SettingsApp() {
       setIsSaving(true);
       setSaveMessage(null);
       await tauriApi.saveSettings(settings);
+      // 保存开机启动设置
+      if (settings.startup_enabled !== undefined) {
+        await tauriApi.setStartupEnabled(settings.startup_enabled);
+      }
       setSaveMessage("设置已保存");
       setTimeout(() => setSaveMessage(null), 2000);
       
@@ -244,6 +255,38 @@ function SettingsApp() {
                   {testResult.message}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+
+        {/* Startup Settings */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">系统设置</h2>
+          
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  开机启动
+                </label>
+                <p className="text-xs text-gray-500">
+                  开机时自动启动应用程序
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.startup_enabled || false}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      startup_enabled: e.target.checked,
+                    })
+                  }
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
             </div>
           </div>
         </div>

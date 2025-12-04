@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Settings {
     pub ollama: OllamaSettings,
+    #[serde(default)]
+    pub startup_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

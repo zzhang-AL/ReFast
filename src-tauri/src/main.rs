@@ -453,6 +453,17 @@ fn main() {
             open_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
             shortcuts::load_shortcuts(&app_data_dir).ok(); // Ignore errors if file doesn't exist
 
+            // Sync startup setting on Windows
+            #[cfg(target_os = "windows")]
+            {
+                use crate::commands;
+                use crate::settings;
+                // Load settings and sync startup state
+                if let Ok(settings) = settings::load_settings(&app_data_dir) {
+                    commands::sync_startup_setting(settings.startup_enabled).ok();
+                }
+            }
+
             // Initialize Everything log file on startup to ensure path is displayed
             #[cfg(target_os = "windows")]
             {
@@ -556,6 +567,8 @@ fn main() {
             get_settings,
             save_settings,
             show_settings_window,
+            is_startup_enabled,
+            set_startup_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

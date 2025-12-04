@@ -244,16 +244,25 @@ export const tauriApi = {
   },
 
   // Settings APIs
-  async getSettings(): Promise<{ ollama: { model: string; base_url: string } }> {
+  async getSettings(): Promise<{ ollama: { model: string; base_url: string }; startup_enabled?: boolean }> {
     return invoke("get_settings");
   },
 
-  async saveSettings(settings: { ollama: { model: string; base_url: string } }): Promise<void> {
+  async saveSettings(settings: { ollama: { model: string; base_url: string }; startup_enabled?: boolean }): Promise<void> {
     return invoke("save_settings", { settings });
   },
 
   async showSettingsWindow(): Promise<void> {
     return invoke("show_settings_window");
+  },
+
+  // Startup APIs
+  async isStartupEnabled(): Promise<boolean> {
+    return invoke("is_startup_enabled");
+  },
+
+  async setStartupEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_startup_enabled", { enabled });
   },
 };
 

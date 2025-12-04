@@ -1770,3 +1770,183 @@ pub async fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     println!("[后端] show_settings_window: END");
     Ok(())
 }
+
+#[cfg(target_os = "windows")]
+mod startup {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ,
+    };
+
+    const REGISTRY_PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    const APP_NAME: &str = "ReFast";
+
+    /// 将字符串转换为宽字符（UTF-16）数组
+    fn to_wide_string(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// 打开注册表键
+    fn open_registry_key(
+        hkey: HKEY,
+        sub_key: &str,
+        access: u32,
+    ) -> Result<HKEY, String> {
+        let sub_key_wide = to_wide_string(sub_key);
+        let mut h_result: HKEY = 0;
+
+        unsafe {
+            let result = RegOpenKeyExW(
+                hkey,
+                sub_key_wide.as_ptr(),
+                0,
+                access,
+                &mut h_result,
+            );
+
+            if result == 0 {
+                Ok(h_result)
+            } else {
+                Err(format!("Failed to open registry key: error code {}", result))
+            }
+        }
+    }
+
+
+    /// 获取当前应用的可执行文件路径
+    pub fn get_exe_path() -> Result<String, String> {
+        std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe path: {}", e))?
+            .to_str()
+            .ok_or_else(|| "Invalid exe path encoding".to_string())
+            .map(|s| s.to_string())
+    }
+
+    /// 检查是否已设置开机启动
+    pub fn is_startup_enabled() -> Result<bool, String> {
+        let hkey = match open_registry_key(HKEY_CURRENT_USER, REGISTRY_PATH, KEY_QUERY_VALUE) {
+            Ok(key) => key,
+            Err(_) => return Ok(false), // 如果注册表键不存在，说明未启用
+        };
+
+        let value_name_wide = to_wide_string(APP_NAME);
+
+        unsafe {
+            // 尝试读取注册表值来检查是否存在
+            let mut value_type: u32 = 0;
+            let mut value_data: Vec<u8> = vec![0; 520]; // 足够大的缓冲区
+            let mut value_size: u32 = value_data.len() as u32;
+
+            let result = RegQueryValueExW(
+                hkey,
+                value_name_wide.as_ptr(),
+                std::ptr::null_mut(),
+                &mut value_type,
+                value_data.as_mut_ptr(),
+                &mut value_size,
+            );
+
+            RegCloseKey(hkey);
+
+            Ok(result == 0 && value_type == REG_SZ)
+        }
+    }
+
+    /// 设置开机启动
+    pub fn enable_startup() -> Result<(), String> {
+        let exe_path = get_exe_path()?;
+        // Run 键应该总是存在的，使用 KEY_ALL_ACCESS 以确保可以写入
+        let hkey = open_registry_key(HKEY_CURRENT_USER, REGISTRY_PATH, KEY_ALL_ACCESS)?;
+
+        let value_name_wide = to_wide_string(APP_NAME);
+        let value_data_wide = to_wide_string(&exe_path);
+
+        unsafe {
+            let result = RegSetValueExW(
+                hkey,
+                value_name_wide.as_ptr(),
+                0,
+                REG_SZ,
+                value_data_wide.as_ptr() as *const u8,
+                (value_data_wide.len() * std::mem::size_of::<u16>()) as u32,
+            );
+
+            RegCloseKey(hkey);
+
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(format!("Failed to set registry value: error code {}", result))
+            }
+        }
+    }
+
+    /// 取消开机启动
+    pub fn disable_startup() -> Result<(), String> {
+        let hkey = open_registry_key(HKEY_CURRENT_USER, REGISTRY_PATH, KEY_SET_VALUE)?;
+        let value_name_wide = to_wide_string(APP_NAME);
+
+        unsafe {
+            let result = RegDeleteValueW(hkey, value_name_wide.as_ptr());
+            RegCloseKey(hkey);
+
+            if result == 0 {
+                Ok(())
+            } else {
+                // 如果值不存在，也认为是成功（已经禁用）
+                if result == 2 {
+                    // ERROR_FILE_NOT_FOUND
+                    Ok(())
+                } else {
+                    Err(format!("Failed to delete registry value: error code {}", result))
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod startup {
+    pub fn is_startup_enabled() -> Result<bool, String> {
+        Err("Startup is only supported on Windows".to_string())
+    }
+
+    pub fn enable_startup() -> Result<(), String> {
+        Err("Startup is only supported on Windows".to_string())
+    }
+
+    pub fn disable_startup() -> Result<(), String> {
+        Err("Startup is only supported on Windows".to_string())
+    }
+}
+
+/// 检查是否已设置开机启动
+#[tauri::command]
+pub fn is_startup_enabled() -> Result<bool, String> {
+    startup::is_startup_enabled()
+}
+
+/// 设置开机启动
+#[tauri::command]
+pub fn set_startup_enabled(enabled: bool) -> Result<(), String> {
+    if enabled {
+        startup::enable_startup()
+    } else {
+        startup::disable_startup()
+    }
+}
+
+/// 同步开机启动设置（内部使用）
+pub fn sync_startup_setting(startup_enabled: bool) -> Result<(), String> {
+    let current = startup::is_startup_enabled().unwrap_or(false);
+    if current != startup_enabled {
+        if startup_enabled {
+            startup::enable_startup()?;
+        } else {
+            startup::disable_startup()?;
+        }
+    }
+    Ok(())
+}
