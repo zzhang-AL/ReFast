@@ -9,6 +9,7 @@ import PluginListApp from "./PluginListApp";
 import SettingsApp from "./SettingsApp";
 import JsonFormatterApp from "./JsonFormatterApp";
 import FileToolboxApp from "./FileToolboxApp";
+import HotkeySettingsApp from "./HotkeySettingsApp";
 import { initializePlugins } from "./plugins";
 import "./styles.css";
 
@@ -99,6 +100,13 @@ async function initApp() {
         </StrictMode>
       );
       console.log("[初始化] FileToolboxApp 已渲染");
+    } else if (label === "hotkey-settings") {
+      ReactDOM.createRoot(root).render(
+        <StrictMode>
+          <HotkeySettingsApp />
+        </StrictMode>
+      );
+      console.log("[初始化] HotkeySettingsApp 已渲染");
     } else {
       ReactDOM.createRoot(root).render(
         <StrictMode>

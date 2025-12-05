@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, emit } from "@tauri-apps/api/event";
 import { tauriApi } from "./api/tauri";
+import { OllamaSettingsPage, SystemSettingsPage } from "./components/SettingsPages";
 import "./styles.css";
 
 interface Settings {
@@ -12,7 +13,10 @@ interface Settings {
   startup_enabled?: boolean;
 }
 
+type SettingsPage = "ollama" | "system";
+
 function SettingsApp() {
+  const [activePage, setActivePage] = useState<SettingsPage>("system");
   const [settings, setSettings] = useState<Settings>({
     ollama: {
       model: "llama2",
@@ -164,10 +168,24 @@ function SettingsApp() {
     );
   }
 
+  const handleOpenHotkeySettings = async () => {
+    try {
+      await tauriApi.showHotkeySettings();
+    } catch (error) {
+      console.error("Failed to open hotkey settings:", error);
+      alert("打开快捷键设置失败");
+    }
+  };
+
+  const menuItems = [
+    { id: "system" as SettingsPage, label: "系统设置", icon: "⚙️" },
+    { id: "ollama" as SettingsPage, label: "Ollama 配置", icon: "🤖" },
+  ];
+
   return (
     <div className="h-screen w-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
         <h1 className="text-xl font-semibold text-gray-800">设置</h1>
         <button
           onClick={handleClose}
@@ -189,111 +207,56 @@ function SettingsApp() {
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {/* Ollama Settings */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Ollama 配置</h2>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                模型名称
-              </label>
-              <input
-                type="text"
-                value={settings.ollama.model}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    ollama: { ...settings.ollama, model: e.target.value },
-                  })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="例如: llama2, mistral, codellama"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                输入已安装的 Ollama 模型名称
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                API 地址
-              </label>
-              <input
-                type="text"
-                value={settings.ollama.base_url}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    ollama: { ...settings.ollama, base_url: e.target.value },
-                  })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="http://localhost:11434"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Ollama API 服务地址
-              </p>
-            </div>
-
-            <div className="pt-2">
-              <button
-                onClick={testConnection}
-                disabled={isTesting || !settings.ollama.model.trim() || !settings.ollama.base_url.trim()}
-                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm"
-              >
-                {isTesting ? "测试中..." : "测试连接"}
-              </button>
-              {testResult && (
-                <div className={`mt-2 p-2 rounded-md text-sm ${
-                  testResult.success 
-                    ? "bg-green-50 text-green-700 border border-green-200" 
-                    : "bg-red-50 text-red-700 border border-red-200"
-                }`}>
-                  {testResult.message}
-                </div>
-              )}
-            </div>
-          </div>
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar Navigation */}
+        <div className="w-48 bg-white border-r border-gray-200 flex-shrink-0 overflow-y-auto">
+          <nav className="p-4">
+            <ul className="space-y-1">
+              {menuItems.map((item) => (
+                <li key={item.id}>
+                  <button
+                    onClick={() => setActivePage(item.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
+                      activePage === item.id
+                        ? "bg-blue-50 text-blue-700 font-medium"
+                        : "text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    <span className="text-lg">{item.icon}</span>
+                    <span className="text-sm">{item.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </nav>
         </div>
 
-        {/* Startup Settings */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">系统设置</h2>
-          
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  开机启动
-                </label>
-                <p className="text-xs text-gray-500">
-                  开机时自动启动应用程序
-                </p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.startup_enabled || false}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      startup_enabled: e.target.checked,
-                    })
-                  }
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <div className="p-6 max-w-4xl">
+            {activePage === "ollama" && (
+              <OllamaSettingsPage
+                settings={settings}
+                onSettingsChange={setSettings}
+                isTesting={isTesting}
+                testResult={testResult}
+                onTestConnection={testConnection}
+              />
+            )}
+            {activePage === "system" && (
+              <SystemSettingsPage
+                settings={settings}
+                onSettingsChange={setSettings}
+                onOpenHotkeySettings={handleOpenHotkeySettings}
+              />
+            )}
           </div>
         </div>
       </div>
 
       {/* Footer */}
-      <div className="bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
         <div className="text-sm text-gray-600">
           {saveMessage && (
             <span className={saveMessage === "设置已保存" ? "text-green-600" : "text-red-600"}>

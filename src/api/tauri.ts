@@ -338,5 +338,22 @@ export const tauriApi = {
   async setStartupEnabled(enabled: boolean): Promise<void> {
     return invoke("set_startup_enabled", { enabled });
   },
+
+  // Hotkey APIs
+  async getHotkeyConfig(): Promise<{ modifiers: string[]; key: string } | null> {
+    return invoke("get_hotkey_config");
+  },
+
+  async saveHotkeyConfig(config: { modifiers: string[]; key: string }): Promise<void> {
+    return invoke("save_hotkey_config", { config });
+  },
+
+  async showHotkeySettings(): Promise<void> {
+    return invoke("show_hotkey_settings");
+  },
+
+  async restartApp(): Promise<void> {
+    return invoke("restart_app");
+  },
 };
 

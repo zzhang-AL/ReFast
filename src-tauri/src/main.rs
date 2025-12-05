@@ -416,8 +416,13 @@ fn main() {
                 let app_data_dir_hotkey = app_data_dir.clone();
                 let (tx, rx) = mpsc::channel();
 
+                // Load hotkey config from settings
+                let hotkey_config = settings::load_settings(&app_data_dir)
+                    .ok()
+                    .and_then(|s| s.hotkey);
+
                 // Start hotkey listener thread in background
-                match hotkey_handler::windows::start_hotkey_listener(tx) {
+                match hotkey_handler::windows::start_hotkey_listener(tx, hotkey_config) {
                     Ok(_handle) => {
                         // Listen for hotkey events in separate thread
                         let app_handle_clone = app_handle.clone();
@@ -575,6 +580,10 @@ fn main() {
             show_settings_window,
             is_startup_enabled,
             set_startup_enabled,
+            get_hotkey_config,
+            save_hotkey_config,
+            show_hotkey_settings,
+            restart_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

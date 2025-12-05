@@ -2417,7 +2417,7 @@ pub async fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
             tauri::WebviewUrl::App("index.html".into()),
         )
         .title("设置")
-        .inner_size(600.0, 500.0)
+        .inner_size(700.0, 700.0)
         .resizable(true)
         .center()
         .build()
@@ -2444,6 +2444,101 @@ pub async fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     println!("[后端] show_settings_window: END");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_hotkey_config(app: tauri::AppHandle) -> Result<Option<settings::HotkeyConfig>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let settings = settings::load_settings(&app_data_dir)?;
+    Ok(settings.hotkey)
+}
+
+#[tauri::command]
+pub fn save_hotkey_config(
+    app: tauri::AppHandle,
+    config: settings::HotkeyConfig,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let mut settings = settings::load_settings(&app_data_dir)?;
+    settings.hotkey = Some(config.clone());
+    settings::save_settings(&app_data_dir, &settings)?;
+    
+    // 更新已注册的快捷键
+    #[cfg(target_os = "windows")]
+    {
+        match crate::hotkey_handler::windows::update_hotkey(config) {
+            Ok(_) => {
+                eprintln!("Hotkey updated successfully");
+            }
+            Err(e) => {
+                eprintln!("Failed to update hotkey: {}", e);
+                // 返回错误，让前端知道更新失败
+                // 但设置已经保存了，下次启动时会使用新设置
+                return Err(format!("快捷键设置已保存，但立即生效失败: {}. 请重启应用以使新快捷键生效。", e));
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn show_hotkey_settings(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    println!("[后端] show_hotkey_settings: START");
+
+    // 1. 尝试获取现有窗口
+    if let Some(window) = app.get_webview_window("hotkey-settings") {
+        println!("[后端] show_hotkey_settings: 窗口已存在，执行显示操作");
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+    } else {
+        println!("[后端] show_hotkey_settings: 窗口不存在，开始动态创建");
+
+        // 2. 动态创建窗口
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "hotkey-settings",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("快捷键设置")
+        .inner_size(600.0, 500.0)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建快捷键设置窗口失败: {}", e))?;
+
+        println!("[后端] show_hotkey_settings: 窗口创建成功");
+    }
+
+    println!("[后端] show_hotkey_settings: END");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
+    // 清理锁文件，以便重启后新实例可以正常启动
+    use std::fs;
+    use std::env;
+    use std::path::PathBuf;
+    
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = env::var("APPDATA") {
+            let lock_file_path = PathBuf::from(appdata).join("ReFast").join("re-fast.lock");
+            let _ = fs::remove_file(&lock_file_path);
+        }
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        let lock_file_path = env::temp_dir().join("re-fast.lock");
+        let _ = fs::remove_file(&lock_file_path);
+    }
+    
+    app.restart();
     Ok(())
 }
 

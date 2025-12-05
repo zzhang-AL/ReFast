@@ -7,6 +7,14 @@ pub struct Settings {
     pub ollama: OllamaSettings,
     #[serde(default)]
     pub startup_enabled: bool,
+    #[serde(default)]
+    pub hotkey: Option<HotkeyConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HotkeyConfig {
+    pub modifiers: Vec<String>,
+    pub key: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
