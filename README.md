@@ -14,6 +14,11 @@
 
 从 [Releases](https://github.com/Xieweikang123/ReFast/releases) 页面下载最新版本的安装包。
 
+## 📥 使用文档
+
+[📚 使用文档 (Wiki)](https://github.com/Xieweikang123/ReFast/wiki)
+
+
 ## 技术栈
 
 - **框架**: Tauri 2.x (支持跨平台，但当前项目主要适配 Windows)
@@ -151,6 +156,7 @@ npm run build:tauri
 - [GitHub 仓库](https://github.com/Xieweikang123/ReFast)
 - [问题反馈](https://github.com/Xieweikang123/ReFast/issues)
 - [Tauri 官网](https://tauri.app/)
+
 
 
 
