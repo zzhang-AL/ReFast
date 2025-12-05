@@ -35,6 +35,8 @@ export interface AppInfo {
   path: string;
   icon?: string;
   description?: string;
+  name_pinyin?: string; // 拼音全拼（用于拼音搜索）
+  name_pinyin_initials?: string; // 拼音首字母（用于拼音首字母搜索）
 }
 
 export interface FileHistoryItem {
