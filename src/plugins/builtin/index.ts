@@ -153,6 +153,39 @@ export function createBuiltinPlugins(): Plugin[] {
         }
       },
     },
+    {
+      id: "calculator_pad",
+      name: "计算稿纸",
+      description: "多行记录：像写草稿一样写多行算式",
+      keywords: [
+        "计算稿纸",
+        "计算",
+        "稿纸",
+        "算式",
+        "计算器",
+        "jisuangaozhi",
+        "jsgz",
+        "jisuan",
+        "js",
+        "gaozhi",
+        "gz",
+        "suanshi",
+        "ss",
+        "jisuanqi",
+        "jsq",
+        "calculator",
+        "pad",
+        "calc",
+      ],
+      execute: async (context) => {
+        // 打开独立的计算稿纸窗口
+        if (context.tauriApi) {
+          await context.tauriApi.showCalculatorPadWindow();
+          // 关闭启动器
+          await context.hideLauncher();
+        }
+      },
+    },
   ];
 }
 

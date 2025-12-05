@@ -531,6 +531,7 @@ fn main() {
             show_plugin_list_window,
             show_json_formatter_window,
             show_file_toolbox_window,
+            show_calculator_pad_window,
             preview_file_replace,
             execute_file_replace,
             select_folder,

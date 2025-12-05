@@ -1841,6 +1841,33 @@ pub async fn show_file_toolbox_window(app: tauri::AppHandle) -> Result<(), Strin
     Ok(())
 }
 
+#[tauri::command]
+pub async fn show_calculator_pad_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // 尝试获取现有窗口
+    if let Some(window) = app.get_webview_window("calculator-pad-window") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+    } else {
+        // 动态创建窗口
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "calculator-pad-window",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("计算稿纸")
+        .inner_size(800.0, 700.0)
+        .resizable(true)
+        .min_inner_size(600.0, 500.0)
+        .center()
+        .build()
+        .map_err(|e| format!("创建计算稿纸窗口失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileReplaceParams {

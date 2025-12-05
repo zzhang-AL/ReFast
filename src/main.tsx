@@ -10,6 +10,7 @@ import SettingsApp from "./SettingsApp";
 import JsonFormatterApp from "./JsonFormatterApp";
 import FileToolboxApp from "./FileToolboxApp";
 import HotkeySettingsApp from "./HotkeySettingsApp";
+import CalculatorPadApp from "./CalculatorPadApp";
 import { initializePlugins } from "./plugins";
 import "./styles.css";
 
@@ -107,6 +108,13 @@ async function initApp() {
         </StrictMode>
       );
       console.log("[初始化] HotkeySettingsApp 已渲染");
+    } else if (label === "calculator-pad-window") {
+      ReactDOM.createRoot(root).render(
+        <StrictMode>
+          <CalculatorPadApp />
+        </StrictMode>
+      );
+      console.log("[初始化] CalculatorPadApp 已渲染");
     } else {
       ReactDOM.createRoot(root).render(
         <StrictMode>

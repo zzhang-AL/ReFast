@@ -190,6 +190,8 @@ export class PluginLoader {
       show_plugin_list: () => import("./builtin/show_plugin_list/index"),
       // JSON 格式化查看插件
       json_formatter: () => import("./builtin/json_formatter/index"),
+      // 计算稿纸插件
+      calculator_pad: () => import("./builtin/calculator_pad/index"),
     };
 
     const importFn = pluginMap[pluginId];

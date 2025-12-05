@@ -234,6 +234,10 @@ export const tauriApi = {
     return invoke("show_file_toolbox_window");
   },
 
+  async showCalculatorPadWindow(): Promise<void> {
+    return invoke("show_calculator_pad_window");
+  },
+
   async previewFileReplace(params: {
     folderPath: string;
     searchText: string;

@@ -94,6 +94,7 @@ export class PluginRegistry {
       memo_center: "plugins/builtin/memo_center",
       show_plugin_list: "plugins/builtin/show_plugin_list",
       json_formatter: "plugins/builtin/json_formatter",
+      calculator_pad: "plugins/builtin/calculator_pad",
     };
     return pathMap[pluginId] || null;
   }
