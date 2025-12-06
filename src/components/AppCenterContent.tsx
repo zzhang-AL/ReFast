@@ -434,6 +434,19 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                 );
               })
             )}
+            {/* 插件统计信息 - 显示在列表底部 */}
+            <div className="mt-6 pt-6 border-t border-gray-200 flex items-center justify-center gap-4 text-sm">
+              <div className="text-gray-600">
+                共 <span className="font-medium text-green-600">{plugins.length}</span> 个插件
+                {searchQuery && (
+                  <span className="ml-1 text-gray-500">
+                    （找到 <span className="font-medium text-green-600">{filteredPlugins.length}</span> 个）
+                  </span>
+                )}
+              </div>
+              <div className="text-gray-400">•</div>
+              <div className="text-gray-500">插件持续开发优化中...</div>
+            </div>
           </div>
         );
       case "settings":
@@ -594,11 +607,6 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                   </button>
                 )}
               </div>
-              {searchQuery && filteredPlugins.length > 0 && (
-                <div className="mt-2 text-sm text-gray-500 text-center">
-                  找到 <span className="font-medium text-green-600">{filteredPlugins.length}</span> 个插件
-                </div>
-              )}
             </div>
           </div>
         )}
