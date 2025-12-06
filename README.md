@@ -164,11 +164,16 @@ npm run build:tauri
 - ✅ JSON 格式化工具
 - ✅ 现代化 UI 界面
 
+### 作者微信:
+加我，等人够3人了咱们建群，哈哈哈
+![53aa841ae60cdd3c39abfa741f09da0d](https://github.com/user-attachments/assets/3071dd2f-1425-489e-b351-98c3bb34689e)
+
 ## 🔗 相关链接
 
 - [GitHub 仓库](https://github.com/Xieweikang123/ReFast)
 - [问题反馈](https://github.com/Xieweikang123/ReFast/issues)
 - [Tauri 官网](https://tauri.app/)
+
 
 
 
