@@ -115,3 +115,15 @@ div.results-list-scroll::-webkit-scrollbar-thumb:active {
 }
 */
 
+/* 插件卡片动画 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
