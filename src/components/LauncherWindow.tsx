@@ -39,6 +39,7 @@ export function LauncherWindow() {
   const [everythingResults, setEverythingResults] = useState<EverythingResult[]>([]);
   const [everythingTotalCount, setEverythingTotalCount] = useState<number | null>(null);
   const [everythingCurrentCount, setEverythingCurrentCount] = useState<number>(0); // 当前已加载的数量
+  const [directPathResult, setDirectPathResult] = useState<FileHistoryItem | null>(null); // 绝对路径直达结果
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingPath, setEverythingPath] = useState<string | null>(null);
   const [everythingVersion, setEverythingVersion] = useState<string | null>(null);
@@ -1209,6 +1210,13 @@ export function LauncherWindow() {
         return;
       }
       
+      const isPathQuery = isLikelyAbsolutePath(trimmedQuery);
+      if (isPathQuery) {
+        handleDirectPathLookup(trimmedQuery);
+      } else {
+        setDirectPathResult(null);
+      }
+      
       // 在防抖结束后、开始搜索前，取消之前的 Everything 搜索
       // 这样可以确保只有在真正开始新搜索时才取消旧搜索
       if (currentSearchRef.current) {
@@ -1236,14 +1244,28 @@ export function LauncherWindow() {
       searchFileHistory(trimmedQuery);
       searchMemos(trimmedQuery);
       handleSearchPlugins(trimmedQuery);
-      searchSystemFolders(trimmedQuery);
-      if (isEverythingAvailable) {
+      if (!isPathQuery) {
+        searchSystemFolders(trimmedQuery);
+      } else {
+        setSystemFolders([]);
+      }
+      if (isEverythingAvailable && !isPathQuery) {
         console.log("Everything is available, calling searchEverything with query:", trimmedQuery);
         searchEverything(trimmedQuery).catch((error) => {
           console.error("searchEverything threw an error:", error);
         });
       } else {
-        console.log("Everything is not available, skipping search. isEverythingAvailable:", isEverythingAvailable);
+        console.log("Everything is not available or query is path-like, skipping Everything search.", {
+          isEverythingAvailable,
+          isPathQuery
+        });
+        if (isPathQuery) {
+          // 绝对路径查询不需要 Everything 结果，避免显示旧搜索残留
+          setEverythingResults([]);
+          setEverythingTotalCount(null);
+          setEverythingCurrentCount(0);
+          setIsSearchingEverything(false);
+        }
       }
     }, debounceTime) as unknown as number;
     
@@ -1308,6 +1330,35 @@ export function LauncherWindow() {
   // 判断字符串是否包含中文字符
   const containsChinese = (text: string): boolean => {
     return /[\u4E00-\u9FFF]/.test(text);
+  };
+
+  // 粗略判断输入是否像是绝对路径（含盘符、UNC 或根路径）
+  const isLikelyAbsolutePath = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed.length < 3) return false;
+    const hasSeparator = trimmed.includes("\\") || trimmed.includes("/");
+    const drivePattern = /^[a-zA-Z]:[\\/]/;
+    const uncPattern = /^\\\\/;
+    const rootLike = trimmed.startsWith("/") && hasSeparator;
+    return (drivePattern.test(trimmed) || uncPattern.test(trimmed) || rootLike) && hasSeparator;
+  };
+
+  // 处理绝对路径直达：存在则生成一个临时文件结果，减少 Everything/系统目录压力
+  const handleDirectPathLookup = async (rawPath: string) => {
+    try {
+      const result = await tauriApi.checkPathExists(rawPath);
+      // 只在查询未变化时更新
+      if (query.trim() === rawPath.trim() && result) {
+        setDirectPathResult(result);
+      } else if (query.trim() === rawPath.trim()) {
+        setDirectPathResult(null);
+      }
+    } catch (error) {
+      console.error("Direct path lookup failed:", error);
+      if (query.trim() === rawPath.trim()) {
+        setDirectPathResult(null);
+      }
+    }
   };
 
   // 判断结果是否为 .lnk 快捷方式
@@ -1539,6 +1590,13 @@ export function LauncherWindow() {
         type: "settings" as const,
         displayName: "设置",
         path: "settings://window",
+      }] : []),
+      // 绝对路径直达结果（如果存在）
+      ...(directPathResult ? [{
+        type: "file" as const,
+        file: directPathResult,
+        displayName: directPathResult.name || directPathResult.path,
+        path: directPathResult.path,
       }] : []),
       // 如果查询匹配启动相关关键词，添加 Windows 系统启动设置页面
       ...(isStartupQuery ? [{
