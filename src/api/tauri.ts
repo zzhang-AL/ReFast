@@ -10,7 +10,7 @@ import type {
   SystemFolderItem,
   IndexStatus,
   FilePreview,
-  FileHistoryItem,
+  DatabaseBackupList,
 } from "../types";
 
 export const tauriApi = {
@@ -151,6 +151,22 @@ export const tauriApi = {
 
   async getEverythingLogFilePath(): Promise<string | null> {
     return invoke("get_everything_log_file_path");
+  },
+
+  async backupDatabase(): Promise<string> {
+    return invoke("backup_database");
+  },
+
+  async getDatabaseBackups(): Promise<DatabaseBackupList> {
+    return invoke("list_backups");
+  },
+
+  async deleteDatabaseBackup(path: string): Promise<void> {
+    return invoke("delete_backup", { path });
+  },
+
+  async restoreDatabaseBackup(path: string): Promise<string> {
+    return invoke("restore_backup", { path });
   },
 
   async getFilePreview(path: string): Promise<FilePreview> {

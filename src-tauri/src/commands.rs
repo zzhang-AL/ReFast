@@ -1439,6 +1439,154 @@ pub struct IndexStatus {
     pub file_history: IndexFileHistoryStatus,
 }
 
+#[derive(Serialize)]
+pub struct DatabaseBackupInfo {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub modified: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct DatabaseBackupList {
+    pub dir: String,
+    pub items: Vec<DatabaseBackupInfo>,
+}
+
+fn ensure_backup_path(path: &str, app_data_dir: &Path) -> Result<std::path::PathBuf, String> {
+    let backup_dir = app_data_dir.join("backups");
+    let backup_dir_canon = backup_dir
+        .canonicalize()
+        .unwrap_or_else(|_| backup_dir.clone());
+
+    let target = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|e| format!("Invalid backup path: {}", e))?;
+
+    if !target.starts_with(&backup_dir_canon) {
+        return Err("Backup path is outside backup directory".to_string());
+    }
+
+    Ok(target)
+}
+
+/// 备份数据库到 app_data_dir/backups/re-fast-backup_yyyyMMdd_HHmmss.db
+#[tauri::command]
+pub fn backup_database(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let db_path = db::get_db_path(&app_data_dir);
+    if !db_path.exists() {
+        return Err("Database file not found".to_string());
+    }
+
+    let backup_dir = app_data_dir.join("backups");
+    fs::create_dir_all(&backup_dir)
+        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let backup_name = format!("re-fast-backup_{}.db", timestamp);
+    let backup_path = backup_dir.join(backup_name);
+
+    fs::copy(&db_path, &backup_path)
+        .map_err(|e| format!("Failed to copy database: {}", e))?;
+
+    Ok(backup_path
+        .to_string_lossy()
+        .to_string())
+}
+
+/// 删除指定的备份文件
+#[tauri::command]
+pub fn delete_backup(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let target = ensure_backup_path(&path, &app_data_dir)?;
+
+    if !target.is_file() {
+        return Err("Backup file not found".to_string());
+    }
+
+    fs::remove_file(&target).map_err(|e| format!("Failed to delete backup: {}", e))
+}
+
+/// 用指定的备份覆盖当前数据库
+#[tauri::command]
+pub fn restore_backup(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let target = ensure_backup_path(&path, &app_data_dir)?;
+
+    if !target.is_file() {
+        return Err("Backup file not found".to_string());
+    }
+
+    let db_path = db::get_db_path(&app_data_dir);
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create database directory: {}", e))?;
+    }
+
+    fs::copy(&target, &db_path)
+        .map_err(|e| format!("Failed to restore database: {}", e))?;
+
+    Ok(db_path
+        .to_string_lossy()
+        .to_string())
+}
+
+/// 获取数据库备份版本列表
+#[tauri::command]
+pub fn list_backups(app: tauri::AppHandle) -> Result<DatabaseBackupList, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let backup_dir = app_data_dir.join("backups");
+
+    if !backup_dir.exists() {
+        return Ok(DatabaseBackupList {
+            dir: backup_dir.to_string_lossy().to_string(),
+            items: vec![],
+        });
+    }
+
+    let mut items = Vec::new();
+    for entry in fs::read_dir(&backup_dir)
+        .map_err(|e| format!("Failed to read backup directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read backup entry: {}", e))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        // 仅保留 .db 备份文件
+        if let Some(ext) = path.extension() {
+            if ext.to_string_lossy().to_lowercase() != "db" {
+                continue;
+            }
+        }
+
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read backup metadata: {}", e))?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+
+        items.push(DatabaseBackupInfo {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: path.to_string_lossy().to_string(),
+            size: metadata.len(),
+            modified,
+        });
+    }
+
+    // 按修改时间降序排序
+    items.sort_by(|a, b| b.modified.unwrap_or(0).cmp(&a.modified.unwrap_or(0)));
+
+    Ok(DatabaseBackupList {
+        dir: backup_dir.to_string_lossy().to_string(),
+        items,
+    })
+}
+
 /// 聚合索引状态，便于前端一次性获取
 #[tauri::command]
 pub fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {

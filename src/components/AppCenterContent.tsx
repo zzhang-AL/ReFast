@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { plugins, executePlugin } from "../plugins";
-import type { PluginContext, IndexStatus, FileHistoryItem, AppInfo } from "../types";
+import type { PluginContext, IndexStatus, FileHistoryItem, AppInfo, DatabaseBackupInfo } from "../types";
 import { tauriApi } from "../api/tauri";
 import { listen, emit } from "@tauri-apps/api/event";
 import { OllamaSettingsPage, SystemSettingsPage, AboutSettingsPage } from "./SettingsPages";
@@ -40,7 +40,7 @@ const menuItems: MenuItem[] = [
   },
   {
     id: "index",
-    name: "索引",
+    name: "数据管理",
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h18M3 12h18M3 19h18" />
@@ -90,6 +90,15 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [historyEndDate, setHistoryEndDate] = useState<string>("");
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
+  const [isBackingUpDb, setIsBackingUpDb] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [backupList, setBackupList] = useState<DatabaseBackupInfo[]>([]);
+  const [backupDir, setBackupDir] = useState<string>("");
+  const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
+  const [deletingBackup, setDeletingBackup] = useState<string | null>(null);
+  const [restoreConfirmPath, setRestoreConfirmPath] = useState<string | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [pendingDeleteCount, setPendingDeleteCount] = useState(0);
   
@@ -115,6 +124,14 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const formatTimestamp = (timestamp?: number | null) => {
     if (!timestamp) return "暂无";
     return new Date(timestamp * 1000).toLocaleString();
+  };
+
+  const formatBytes = (size?: number | null) => {
+    if (!size && size !== 0) return "未知";
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
   const parseDateRangeToTs = (start: string, end: string): { start?: number; end?: number } => {
@@ -184,6 +201,21 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     }
   };
 
+  const loadBackupList = async () => {
+    try {
+      setIsLoadingBackups(true);
+      setBackupError(null);
+      const result = await tauriApi.getDatabaseBackups();
+      setBackupDir(result.dir);
+      setBackupList(result.items);
+    } catch (error: any) {
+      console.error("获取备份列表失败:", error);
+      setBackupError(error?.message || "获取备份列表失败");
+    } finally {
+      setIsLoadingBackups(false);
+    }
+  };
+
   const handleRefreshIndex = async () => {
     await Promise.all([fetchIndexStatus(), loadFileHistoryList()]);
   };
@@ -228,6 +260,88 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     } finally {
       setIsDeletingHistory(false);
       setTimeout(() => setHistoryMessage(null), 3000);
+    }
+  };
+
+  const handleBackupDatabase = async () => {
+    setIsBackingUpDb(true);
+    setBackupMessage(null);
+    try {
+      const path = await tauriApi.backupDatabase();
+      setBackupMessage(`备份成功：${path}`);
+      await loadBackupList();
+    } catch (error: any) {
+      console.error("备份数据库失败:", error);
+      setBackupMessage(error?.message || "备份失败");
+    } finally {
+      setIsBackingUpDb(false);
+      setTimeout(() => setBackupMessage(null), 4000);
+    }
+  };
+
+  const handleOpenBackupDir = async () => {
+    if (!backupDir) return;
+    try {
+      await tauriApi.revealInFolder(backupDir);
+    } catch (error: any) {
+      console.error("打开备份目录失败:", error);
+      setBackupError(error?.message || "无法打开备份目录");
+      setTimeout(() => setBackupError(null), 3000);
+    }
+  };
+
+  const handleRestoreBackup = async (path: string) => {
+    setRestoringBackup(path);
+    setBackupError(null);
+    setBackupMessage(null);
+    try {
+      const dest = await tauriApi.restoreDatabaseBackup(path);
+      setBackupMessage(`已还原到：${dest}`);
+      await Promise.all([loadBackupList(), fetchIndexStatus(), loadFileHistoryList()]);
+    } catch (error: any) {
+      console.error("还原备份失败:", error);
+      setBackupError(error?.message || "还原失败");
+    } finally {
+      setRestoringBackup(null);
+      setTimeout(() => {
+        setBackupMessage(null);
+        setBackupError(null);
+      }, 4000);
+    }
+  };
+
+  const handleOpenRestoreConfirm = (path: string) => {
+    setRestoreConfirmPath(path);
+  };
+
+  const handleCancelRestore = () => {
+    setRestoreConfirmPath(null);
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!restoreConfirmPath) return;
+    const path = restoreConfirmPath;
+    setRestoreConfirmPath(null);
+    await handleRestoreBackup(path);
+  };
+
+  const handleDeleteBackup = async (path: string) => {
+    setDeletingBackup(path);
+    setBackupError(null);
+    setBackupMessage(null);
+    try {
+      await tauriApi.deleteDatabaseBackup(path);
+      setBackupMessage("备份已删除");
+      await loadBackupList();
+    } catch (error: any) {
+      console.error("删除备份失败:", error);
+      setBackupError(error?.message || "删除失败");
+    } finally {
+      setDeletingBackup(null);
+      setTimeout(() => {
+        setBackupMessage(null);
+        setBackupError(null);
+      }, 4000);
     }
   };
 
@@ -482,6 +596,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     if (activeCategory === "index") {
       fetchIndexStatus();
       loadFileHistoryList();
+      loadBackupList();
     }
   }, [activeCategory]);
 
@@ -831,6 +946,108 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
 
                   <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm md:col-span-2">
                     <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="font-semibold text-gray-900">数据库备份</div>
+                        <button
+                          type="button"
+                          aria-label="备份说明"
+                          title="备份包含：设置、快捷方式、文件历史、打开历史、备忘录、窗口位置；不包含：应用索引缓存(app_cache.json)、录制文件、插件目录。还原会覆盖当前数据库。"
+                          className="w-6 h-6 flex items-center justify-center text-[11px] rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:border-gray-300"
+                        >
+                          ?
+                        </button>
+                      </div>
+                      <span className="text-xs px-2 py-1 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                        {backupList.length} 份
+                      </span>
+                    </div>
+                    <div className="space-y-1 text-sm text-gray-700">
+                      <div className="break-all flex flex-wrap items-center gap-2">
+                        <span>存储路径：{backupDir || "未生成"}</span>
+                        {backupDir && (
+                          <button
+                            onClick={handleOpenBackupDir}
+                            className="px-2 py-1 text-[11px] rounded border border-gray-200 text-blue-600 hover:border-blue-300 hover:text-blue-700 transition"
+                          >
+                            打开
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 items-center">
+                      <button
+                        onClick={loadBackupList}
+                        className="px-3 py-2 text-xs rounded-lg bg-white text-gray-700 border border-gray-200 hover:border-gray-300 transition"
+                        disabled={isLoadingBackups}
+                      >
+                        {isLoadingBackups ? "加载中..." : "刷新列表"}
+                      </button>
+                      <button
+                        onClick={handleBackupDatabase}
+                        className="px-3 py-2 text-xs rounded-lg bg-white text-gray-700 border border-gray-200 hover:border-gray-300 transition"
+                        disabled={isBackingUpDb}
+                      >
+                        {isBackingUpDb ? "备份中..." : "立即备份"}
+                      </button>
+                      {(backupMessage || backupError) && (
+                        <div
+                          className={`w-full text-xs px-3 py-2 rounded-lg border ${
+                            backupError
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : "bg-green-50 text-green-700 border-green-200"
+                          }`}
+                        >
+                          {backupError || backupMessage}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 border-t border-gray-100 pt-3 max-h-48 overflow-auto">
+                      {isLoadingBackups && <div className="text-xs text-gray-500">加载中...</div>}
+                      {!isLoadingBackups && backupList.length === 0 && (
+                        <div className="text-xs text-gray-500">暂无备份</div>
+                      )}
+                      {!isLoadingBackups && backupList.length > 0 && (
+                        <div className="space-y-2 text-xs text-gray-700">
+                          {backupList.slice(0, 30).map((item) => (
+                            <div
+                              key={item.path}
+                              className="p-2 rounded-md border border-gray-100 hover:border-gray-200"
+                            >
+                              <div className="font-medium text-gray-900 truncate">{item.name}</div>
+                              <div className="text-gray-500 break-all">{item.path}</div>
+                              <div className="text-gray-400 flex flex-wrap items-center gap-2">
+                                <span>{formatTimestamp(item.modified)} · {formatBytes(item.size)}</span>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleOpenRestoreConfirm(item.path)}
+                                    className="px-2 py-1 text-[11px] rounded border border-gray-200 hover:border-gray-300 text-green-700"
+                                    disabled={restoringBackup === item.path || deletingBackup === item.path}
+                                  >
+                                    {restoringBackup === item.path ? "还原中..." : "还原"}
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteBackup(item.path)}
+                                    className="px-2 py-1 text-[11px] rounded border border-gray-200 hover:border-gray-300 text-red-600"
+                                    disabled={restoringBackup === item.path || deletingBackup === item.path}
+                                  >
+                                    {deletingBackup === item.path ? "删除中..." : "删除"}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {backupList.length > 30 && (
+                            <div className="text-gray-400 text-[11px]">
+                              已显示前 30 条，共 {backupList.length} 条
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm md:col-span-2">
+                    <div className="flex items-center justify-between mb-3">
                       <div className="font-semibold text-gray-900">文件历史</div>
                       <span className="text-xs px-2 py-1 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
                         {indexStatus?.file_history?.total ?? 0} 条
@@ -1105,6 +1322,32 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                 className="px-3 py-2 text-sm rounded-lg bg-red-50 text-red-700 border border-red-200 hover:border-red-300"
               >
                 确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {restoreConfirmPath && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 p-5">
+            <div className="text-lg font-semibold text-gray-900 mb-2">确认还原</div>
+            <div className="text-sm text-gray-700 mb-4 space-y-2">
+              <div>将用此备份覆盖当前数据库，操作不可撤销。</div>
+              <div className="text-xs text-gray-500 break-all">{restoreConfirmPath}</div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={handleCancelRestore}
+                className="px-3 py-2 text-sm rounded-lg bg-white border border-gray-200 hover:border-gray-300 text-gray-700"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmRestore}
+                className="px-3 py-2 text-sm rounded-lg bg-red-50 text-red-700 border border-red-200 hover:border-red-300"
+              >
+                确认还原
               </button>
             </div>
           </div>

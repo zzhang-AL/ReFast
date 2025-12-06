@@ -94,6 +94,18 @@ export interface IndexStatus {
   file_history: IndexFileHistoryStatus;
 }
 
+export interface DatabaseBackupInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified?: number | null;
+}
+
+export interface DatabaseBackupList {
+  dir: string;
+  items: DatabaseBackupInfo[];
+}
+
 export type FilePreviewKind =
   | "text"
   | "image"
