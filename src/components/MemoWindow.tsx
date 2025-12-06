@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { tauriApi } from "../api/tauri";
 import type { MemoItem } from "../types";
 
@@ -149,7 +150,12 @@ export function MemoWindow() {
                 >
                   <div
                     className="cursor-pointer"
-                    onClick={() => {
+                    onClick={(e) => {
+                      // 如果点击的是按钮或其子元素，不执行操作
+                      const target = e.target as HTMLElement;
+                      if (target.closest('button')) {
+                        return;
+                      }
                       setIsMemoListMode(false);
                       setSelectedMemo(memo);
                       setMemoEditTitle(memo.title);
@@ -204,9 +210,14 @@ export function MemoWindow() {
                       复制并关闭
                     </button>
                     <button
-                      onClick={async (e) => {
+                      onMouseDown={async (e) => {
+                        e.preventDefault();
                         e.stopPropagation();
-                        if (!confirm("确定要删除这条备忘录吗？")) {
+                        const confirmed = await confirm("确定要删除这条备忘录吗？", {
+                          title: "删除确认",
+                          kind: "warning",
+                        });
+                        if (!confirmed) {
                           return;
                         }
                         try {
@@ -220,6 +231,10 @@ export function MemoWindow() {
                           console.error("Failed to delete memo:", error);
                           alert(`删除备忘录失败: ${error}`);
                         }
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                       }}
                       className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-300 hover:border-red-400 transition-colors"
                       title="删除备忘录"
@@ -350,8 +365,16 @@ export function MemoWindow() {
           </button>
           {selectedMemo && (
             <button
-              onClick={async () => {
-                if (!confirm("确定要删除这条备忘录吗？")) return;
+              onMouseDown={async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const confirmed = await confirm("确定要删除这条备忘录吗？", {
+                  title: "删除确认",
+                  kind: "warning",
+                });
+                if (!confirmed) {
+                  return;
+                }
                 try {
                   await tauriApi.deleteMemo(selectedMemo.id);
                   await loadMemos();
@@ -360,6 +383,10 @@ export function MemoWindow() {
                   console.error("Failed to delete memo:", error);
                   alert(`删除备忘录失败: ${error}`);
                 }
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
               }}
               className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded transition-colors"
             >
