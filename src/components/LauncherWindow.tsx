@@ -230,6 +230,13 @@ export function LauncherWindow() {
           border: ${config.thumbBorder}px solid ${config.thumbActiveBorder} !important;
           box-shadow: none !important;
         }
+        
+        /* 隐藏可执行文件横向滚动条的滚动条 */
+        .executable-scroll-container::-webkit-scrollbar {
+          display: none !important;
+          width: 0 !important;
+          height: 0 !important;
+        }
       `;
       document.head.appendChild(style);
     };
@@ -1611,12 +1618,41 @@ export function LauncherWindow() {
         displayName: app.name,
         path: app.path,
       })),
-      ...filteredFiles.map((file) => ({
-        type: "file" as const,
-        file,
-        displayName: file.name,
-        path: file.path,
-      })),
+      // 从文件历史记录中分离可执行文件
+      ...filteredFiles
+        .filter((file) => {
+          const pathLower = file.path.toLowerCase();
+          return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
+        })
+        .filter((file) => {
+          // 检查是否已经在 filteredApps 中，如果已存在则过滤掉
+          return !filteredApps.some(app => app.path === file.path);
+        })
+        .map((file): SearchResult => ({
+          type: "app" as const,
+          app: {
+            name: file.name,
+            path: file.path,
+            icon: undefined, // 图标将在渲染时尝试从应用列表获取
+            description: undefined,
+            name_pinyin: undefined,
+            name_pinyin_initials: undefined,
+          },
+          displayName: file.name,
+          path: file.path,
+        })),
+      // 普通文件（非可执行文件）
+      ...filteredFiles
+        .filter((file) => {
+          const pathLower = file.path.toLowerCase();
+          return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+        })
+        .map((file) => ({
+          type: "file" as const,
+          file,
+          displayName: file.name,
+          path: file.path,
+        })),
       ...filteredMemos.map((memo) => ({
         type: "memo" as const,
         memo,
@@ -1648,13 +1684,42 @@ export function LauncherWindow() {
         displayName: folder.display_name,
         path: folder.path,
       })),
-      // 显示所有 Everything 结果
-      ...everythingResults.map((everything) => ({
-        type: "everything" as const,
-        everything,
-        displayName: everything.name,
-        path: everything.path,
-      })),
+      // 从 Everything 结果中分离可执行文件
+      ...everythingResults
+        .filter((everything) => {
+          const pathLower = everything.path.toLowerCase();
+          return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
+        })
+        .filter((everything) => {
+          // 检查是否已经在 filteredApps 或 filteredFiles 中，如果已存在则过滤掉
+          return !filteredApps.some(app => app.path === everything.path) &&
+                 !filteredFiles.some(file => file.path === everything.path);
+        })
+        .map((everything): SearchResult => ({
+          type: "app" as const,
+          app: {
+            name: everything.name,
+            path: everything.path,
+            icon: undefined, // 图标将在渲染时尝试从应用列表获取
+            description: undefined,
+            name_pinyin: undefined,
+            name_pinyin_initials: undefined,
+          },
+          displayName: everything.name,
+          path: everything.path,
+        })),
+      // 普通 Everything 结果（非可执行文件）
+      ...everythingResults
+        .filter((everything) => {
+          const pathLower = everything.path.toLowerCase();
+          return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+        })
+        .map((everything) => ({
+          type: "everything" as const,
+          everything,
+          displayName: everything.name,
+          path: everything.path,
+        })),
     ];
     
     // 对结果进行去重：如果同一个路径出现在多个结果源中，只保留一个
@@ -3502,9 +3567,144 @@ export function LauncherWindow() {
               className="flex-1 overflow-y-auto min-h-0 results-list-scroll py-2"
               style={{ maxHeight: '500px' }}
             >
-              {results.map((result, index) => (
+              {(() => {
+                // 分离可执行文件（app类型且路径是.exe或.lnk）
+                const executableResults = results.filter(result => {
+                  if (result.type === "app") {
+                    const pathLower = result.path.toLowerCase();
+                    return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
+                  }
+                  return false;
+                });
+                
+                // 其他结果
+                const otherResults = results.filter(result => {
+                  if (result.type === "app") {
+                    const pathLower = result.path.toLowerCase();
+                    return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+                  }
+                  return true;
+                });
+                
+                return (
+                  <>
+                    {/* 可执行文件横向排列在第一行 */}
+                    {executableResults.length > 0 && (
+                      <div className="px-4 py-3 mb-2 border-b border-gray-200">
+                        <div 
+                          className="flex gap-3 overflow-x-auto pb-2 executable-scroll-container"
+                          style={{ 
+                            scrollbarWidth: 'none', // Firefox
+                            msOverflowStyle: 'none', // IE/Edge
+                          }}
+                        >
+                          {executableResults.map((result, execIndex) => {
+                            const globalIndex = results.indexOf(result);
+                            return (
+                              <div
+                                key={`executable-${result.path}-${execIndex}`}
+                                onMouseDown={async (e) => {
+                                  if (e.button !== 0) return;
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  await handleLaunch(result);
+                                }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                onContextMenu={(e) => handleContextMenu(e, result)}
+                                className={`flex flex-col items-center justify-center gap-1.5 p-2 rounded-lg cursor-pointer transition-all min-w-[70px] ${
+                                  globalIndex === selectedIndex 
+                                    ? theme.card(true) 
+                                    : 'hover:bg-gray-100 bg-gray-50'
+                                }`}
+                                style={{
+                                  animation: `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
+                                }}
+                              >
+                                {globalIndex === selectedIndex && (
+                                  <div className={theme.indicator(true)} style={{ position: 'absolute', top: '4px', left: '4px', width: '3px', height: '3px', borderRadius: '50%' }} />
+                                )}
+                                <div className="flex-shrink-0">
+                                  {result.type === "app" ? (() => {
+                                    let iconToUse = result.app?.icon;
+                                    if (!iconToUse && result.path) {
+                                      const matchedApp = apps.find(app => app.path === result.path);
+                                      if (matchedApp && matchedApp.icon) {
+                                        iconToUse = matchedApp.icon;
+                                      }
+                                    }
+                                    if (iconToUse) {
+                                      return (
+                                        <img 
+                                          src={iconToUse} 
+                                          alt={result.displayName}
+                                          className="w-8 h-8 object-contain"
+                                          style={{ imageRendering: 'auto' as const }}
+                                          onError={(e) => {
+                                            const target = e.target as HTMLImageElement;
+                                            target.style.display = 'none';
+                                            const parent = target.parentElement;
+                                            if (parent && !parent.querySelector('svg')) {
+                                              const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                                              svg.setAttribute('class', `w-6 h-6 ${globalIndex === selectedIndex ? 'text-white' : 'text-gray-500'}`);
+                                              svg.setAttribute('fill', 'none');
+                                              svg.setAttribute('stroke', 'currentColor');
+                                              svg.setAttribute('viewBox', '0 0 24 24');
+                                              const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                              path.setAttribute('stroke-linecap', 'round');
+                                              path.setAttribute('stroke-linejoin', 'round');
+                                              path.setAttribute('stroke-width', '2');
+                                              path.setAttribute('d', 'M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z');
+                                              svg.appendChild(path);
+                                              parent.appendChild(svg);
+                                            }
+                                          }}
+                                        />
+                                      );
+                                    } else {
+                                      return (
+                                        <svg
+                                          className={`w-6 h-6 ${globalIndex === selectedIndex ? 'text-white' : 'text-gray-500'}`}
+                                          fill="none"
+                                          stroke="currentColor"
+                                          viewBox="0 0 24 24"
+                                        >
+                                          <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"
+                                          />
+                                          <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M8 10h8m-8 4h5m-5-7h.01"
+                                          />
+                                        </svg>
+                                      );
+                                    }
+                                  })() : null}
+                                </div>
+                                <div className="text-xs text-center truncate w-full max-w-[70px]" 
+                                  dangerouslySetInnerHTML={{ __html: highlightText(result.displayName, query) }}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {/* 其他结果垂直排列 */}
+                    {otherResults.map((result, index) => {
+                      // 计算全局索引（需要考虑可执行文件的数量）
+                      const globalIndex = results.indexOf(result);
+                      const isSelected = globalIndex === selectedIndex;
+                      return (
                 <div
-                  key={`${result.type}-${result.path}-${index}`}
+                  key={`${result.type}-${result.path}-${globalIndex}`}
                   onMouseDown={async (e) => {
                     // 左键按下即触发，避免某些环境下 click 被吞掉
                     if (e.button !== 0) return;
@@ -3518,69 +3718,86 @@ export function LauncherWindow() {
                     e.stopPropagation();
                   }}
                   onContextMenu={(e) => handleContextMenu(e, result)}
-                  className={theme.card(index === selectedIndex)}
+                  className={theme.card(globalIndex === selectedIndex)}
                   style={{
                     animation: `fadeInUp 0.18s ease-out ${index * 0.02}s both`,
                   }}
                 >
-                  <div className={theme.indicator(index === selectedIndex)} />
+                  <div className={theme.indicator(globalIndex === selectedIndex)} />
                   <div className="flex items-center gap-3">
                     {/* 序号 */}
-                    <div className={theme.indexBadge(index === selectedIndex)}>
-                      {index + 1}
+                    <div className={theme.indexBadge(globalIndex === selectedIndex)}>
+                      {globalIndex + 1}
                     </div>
-                    <div className={theme.iconWrap(index === selectedIndex)}>
-                      {result.type === "app" && result.app?.icon ? (
-                        <img 
-                          src={result.app.icon} 
-                          alt={result.displayName}
-                          className="w-8 h-8 object-contain"
-                          style={{ imageRendering: 'auto' as const }}
-                          onError={(e) => {
-                            // Fallback to default icon if image fails to load
-                            const target = e.target as HTMLImageElement;
-                            target.style.display = 'none';
-                            const parent = target.parentElement;
-                            if (parent && !parent.querySelector('svg')) {
-                              const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                              svg.setAttribute('class', `w-5 h-5 ${index === selectedIndex ? 'text-white' : 'text-gray-500'}`);
-                              svg.setAttribute('fill', 'none');
-                              svg.setAttribute('stroke', 'currentColor');
-                              svg.setAttribute('viewBox', '0 0 24 24');
-                              const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                              path.setAttribute('stroke-linecap', 'round');
-                              path.setAttribute('stroke-linejoin', 'round');
-                              path.setAttribute('stroke-width', '2');
-                              path.setAttribute('d', 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z');
-                              svg.appendChild(path);
-                              parent.appendChild(svg);
-                            }
-                          }}
-                        />
-                      ) : result.type === "app" ? (
-                        // 应用类型但没有图标，显示占位图标
+                    <div className={theme.iconWrap(globalIndex === selectedIndex)}>
+                      {result.type === "app" ? (() => {
+                        // 优先使用 result.app.icon
+                        let iconToUse = result.app?.icon;
+                        
+                        // 如果没有图标，尝试从应用列表中查找匹配的应用图标
+                        if (!iconToUse && result.path) {
+                          const matchedApp = apps.find(app => app.path === result.path);
+                          if (matchedApp && matchedApp.icon) {
+                            iconToUse = matchedApp.icon;
+                          }
+                        }
+                        
+                        if (iconToUse) {
+                          return (
+                            <img 
+                              src={iconToUse} 
+                              alt={result.displayName}
+                              className="w-8 h-8 object-contain"
+                              style={{ imageRendering: 'auto' as const }}
+                              onError={(e) => {
+                                // Fallback to default icon if image fails to load
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                const parent = target.parentElement;
+                                if (parent && !parent.querySelector('svg')) {
+                                  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                                  svg.setAttribute('class', `w-5 h-5 ${index === selectedIndex ? 'text-white' : 'text-gray-500'}`);
+                                  svg.setAttribute('fill', 'none');
+                                  svg.setAttribute('stroke', 'currentColor');
+                                  svg.setAttribute('viewBox', '0 0 24 24');
+                                  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                  path.setAttribute('stroke-linecap', 'round');
+                                  path.setAttribute('stroke-linejoin', 'round');
+                                  path.setAttribute('stroke-width', '2');
+                                  path.setAttribute('d', 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z');
+                                  svg.appendChild(path);
+                                  parent.appendChild(svg);
+                                }
+                              }}
+                            />
+                          );
+                        } else {
+                          // 应用类型但没有图标，显示占位图标
+                          return (
+                            <svg
+                              className={`w-5 h-5 ${theme.iconColor(isSelected, "text-gray-500")}`}
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"
+                              />
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M8 10h8m-8 4h5m-5-7h.01"
+                              />
+                            </svg>
+                          );
+                        }
+                      })() : result.type === "url" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-gray-500")}`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"
-                          />
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M8 10h8m-8 4h5m-5-7h.01"
-                          />
-                        </svg>
-                      ) : result.type === "url" ? (
-                        <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-blue-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-blue-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3594,7 +3811,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "memo" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-purple-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-purple-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3608,7 +3825,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "plugin" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-purple-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-purple-500")}`}
                           fill="currentColor"
                           viewBox="0 0 24 24"
                         >
@@ -3616,7 +3833,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "history" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-orange-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-orange-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3630,7 +3847,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "settings" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-gray-600")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-gray-600")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3650,7 +3867,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "ai" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-blue-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-blue-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3666,7 +3883,7 @@ export function LauncherWindow() {
                         </svg>
                       ) : result.type === "json_formatter" ? (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-indigo-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-indigo-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3722,7 +3939,7 @@ export function LauncherWindow() {
                                     const parent = target.parentElement;
                                     if (parent && !parent.querySelector('svg')) {
                                       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                                      svg.setAttribute('class', `w-5 h-5 ${index === selectedIndex ? 'text-white' : 'text-gray-500'}`);
+                                      svg.setAttribute('class', `w-5 h-5 ${isSelected ? 'text-white' : 'text-gray-500'}`);
                                       svg.setAttribute('fill', 'none');
                                       svg.setAttribute('stroke', 'currentColor');
                                       svg.setAttribute('viewBox', '0 0 24 24');
@@ -3742,7 +3959,7 @@ export function LauncherWindow() {
                           // 默认显示文档图标
                           return (
                             <svg
-                              className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-gray-500")}`}
+                              className={`w-5 h-5 ${theme.iconColor(isSelected, "text-gray-500")}`}
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
@@ -3758,7 +3975,7 @@ export function LauncherWindow() {
                         })()
                       ) : (
                         <svg
-                          className={`w-5 h-5 ${theme.iconColor(index === selectedIndex, "text-gray-500")}`}
+                          className={`w-5 h-5 ${theme.iconColor(isSelected, "text-gray-500")}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -3774,12 +3991,12 @@ export function LauncherWindow() {
                     </div>
                     <div className="flex-1 min-w-0">
                     <div 
-                        className={`font-semibold truncate mb-0.5 ${theme.title(index === selectedIndex)}`}
+                        className={`font-semibold truncate mb-0.5 ${theme.title(isSelected)}`}
                         dangerouslySetInnerHTML={{ __html: highlightText(result.displayName, query) }}
                       />
                       {result.type === "ai" && result.aiAnswer && (
                         <div
-                          className={`text-sm mt-1.5 leading-relaxed ${theme.aiText(index === selectedIndex)}`}
+                          className={`text-sm mt-1.5 leading-relaxed ${theme.aiText(isSelected)}`}
                           style={{
                             whiteSpace: "pre-wrap",
                             wordBreak: "break-word",
@@ -3792,26 +4009,26 @@ export function LauncherWindow() {
                       )}
                       {result.path && result.type !== "memo" && result.type !== "history" && result.type !== "ai" && (
                         <div
-                          className={`text-xs truncate mt-0.5 ${theme.pathText(index === selectedIndex)}`}
+                          className={`text-xs truncate mt-0.5 ${theme.pathText(isSelected)}`}
                           dangerouslySetInnerHTML={{ __html: highlightText(result.path, query) }}
                         />
                       )}
                       {result.type === "memo" && result.memo && (
                         <div
-                          className={`text-xs mt-0.5 ${theme.metaText(index === selectedIndex)}`}
+                          className={`text-xs mt-0.5 ${theme.metaText(isSelected)}`}
                         >
                           {new Date(result.memo.updated_at * 1000).toLocaleDateString("zh-CN")}
                         </div>
                       )}
                       {result.type === "plugin" && result.plugin?.description && (
                         <div
-                          className={`text-xs mt-0.5 leading-relaxed ${theme.descText(index === selectedIndex)}`}
+                          className={`text-xs mt-0.5 leading-relaxed ${theme.descText(isSelected)}`}
                           dangerouslySetInnerHTML={{ __html: highlightText(result.plugin.description, query) }}
                         />
                       )}
                       {result.type === "file" && result.file && (
                         <div
-                          className={`text-xs mt-0.5 ${theme.usageText(index === selectedIndex)}`}
+                          className={`text-xs mt-0.5 ${theme.usageText(isSelected)}`}
                         >
                           使用 {result.file.use_count} 次
                         </div>
@@ -3819,7 +4036,7 @@ export function LauncherWindow() {
                       {result.type === "url" && (
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
-                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("url", index === selectedIndex)}`}
+                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("url", isSelected)}`}
                             title="可打开的 URL"
                           >
                             URL
@@ -3829,7 +4046,7 @@ export function LauncherWindow() {
                       {result.type === "json_formatter" && (
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
-                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("json_formatter", index === selectedIndex)}`}
+                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("json_formatter", isSelected)}`}
                             title="JSON 格式化查看器"
                           >
                             JSON
@@ -3839,14 +4056,14 @@ export function LauncherWindow() {
                       {result.type === "memo" && result.memo && (
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
-                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("memo", index === selectedIndex)}`}
+                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("memo", isSelected)}`}
                             title="备忘录"
                           >
                             备忘录
                           </span>
                           {result.memo.content && (
                             <span
-                              className={`text-xs truncate ${theme.metaText(index === selectedIndex)}`}
+                              className={`text-xs truncate ${theme.metaText(isSelected)}`}
                               dangerouslySetInnerHTML={{ 
                                 __html: highlightText(
                                   result.memo.content.slice(0, 50) + (result.memo.content.length > 50 ? "..." : ""),
@@ -3860,7 +4077,7 @@ export function LauncherWindow() {
                       {result.type === "everything" && (
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
-                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("everything", index === selectedIndex)}`}
+                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("everything", isSelected)}`}
                             title="来自 Everything 搜索结果"
                           >
                             Everything
@@ -3870,7 +4087,11 @@ export function LauncherWindow() {
                     </div>
                   </div>
                 </div>
-              ))}
+                      );
+                    })}
+                  </>
+                );
+              })()}
             </div>
           ) : null}
 
