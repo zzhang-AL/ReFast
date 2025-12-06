@@ -61,7 +61,7 @@ interface AppCenterContentProps {
   onClose?: () => void;
 }
 
-export function AppCenterContent({ onPluginClick, onClose }: AppCenterContentProps) {
+export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenterContentProps) {
   const [activeCategory, setActiveCategory] = useState<MenuCategory>("plugins");
   const [searchQuery, setSearchQuery] = useState("");
   
@@ -86,16 +86,17 @@ export function AppCenterContent({ onPluginClick, onClose }: AppCenterContentPro
       await onPluginClick(pluginId);
     } else {
       // 默认行为：创建插件上下文并执行
+      // 在应用中心窗口中，不关闭窗口
       const pluginContext: PluginContext = {
         setQuery: () => {},
         setSelectedIndex: () => {},
         hideLauncher: async () => {
-          onClose?.();
+          // 在应用中心窗口中，不关闭窗口，只作为空操作
         },
         tauriApi,
       };
       await executePlugin(pluginId, pluginContext);
-      onClose?.();
+      // 不自动关闭应用中心窗口
     }
   };
 

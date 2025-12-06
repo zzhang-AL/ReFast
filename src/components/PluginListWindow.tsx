@@ -12,37 +12,25 @@ export function PluginListWindow() {
   };
 
   // 处理插件点击
-  const isClosingRef = useRef(false);
-  
   const handlePluginClick = async (pluginId: string) => {
-    if (isClosingRef.current) return; // 防止重复点击
-    
     try {
-      isClosingRef.current = true;
-      
-      // 创建插件上下文（在插件列表窗口中，大多数上下文函数不需要，使用空函数即可）
+      // 创建插件上下文（在应用中心窗口中，hideLauncher 不关闭应用中心窗口）
       const pluginContext: PluginContext = {
         setQuery: () => {},
         setSelectedIndex: () => {},
         hideLauncher: async () => {
-          await handleClose();
+          // 在应用中心窗口中，不关闭窗口，只作为空操作
+          // 这样插件可以正常执行，但不会关闭应用中心
         },
         tauriApi,
       };
 
       // 执行插件
       await executePlugin(pluginId, pluginContext);
-
-      // 执行完成后关闭插件列表窗口（如果插件没有关闭它）
-      try {
-        await handleClose();
-      } catch (error) {
-        // 如果窗口已经关闭，忽略错误
-        // This is expected if hideLauncher already closed it
-      }
+      
+      // 不自动关闭应用中心窗口，让用户可以继续使用
     } catch (error) {
       console.error("Failed to execute plugin:", error);
-      isClosingRef.current = false; // 出错时重置，允许重试
     }
   };
 
