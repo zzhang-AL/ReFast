@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, emit } from "@tauri-apps/api/event";
 import { tauriApi } from "./api/tauri";
@@ -33,10 +33,13 @@ function SettingsApp() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const hasLoadedSettingsRef = useRef(false);
 
   const loadSettings = async () => {
     try {
       setIsLoading(true);
+      hasLoadedSettingsRef.current = false; // 重置标志，避免加载时触发自动保存
       const data = await tauriApi.getSettings();
       // 同步开机启动状态
       const startupEnabled = await tauriApi.isStartupEnabled();
@@ -154,6 +157,39 @@ function SettingsApp() {
 
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 设置变更自动保存（防抖处理）
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (!hasLoadedSettingsRef.current) {
+      hasLoadedSettingsRef.current = true;
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      saveSettings();
+    }, 400);
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [settings, isLoading]);
+
+  // 卸载时清理定时器
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
     };
   }, []);
 
