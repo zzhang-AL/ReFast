@@ -1787,8 +1787,45 @@ export function LauncherWindow() {
       }
       return false;
     });
+    
+    // 对应用结果按规范化路径去重（统一路径分隔符）
+    const normalizedPathMap = new Map<string, SearchResult>();
+    
+    for (const result of executableResults) {
+      if (result.type === "app") {
+        // 规范化路径：统一使用正斜杠，转小写
+        const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+        
+        if (!normalizedPathMap.has(normalizedPath)) {
+          // 路径不存在，直接添加
+          normalizedPathMap.set(normalizedPath, result);
+        } else {
+          // 路径已存在，比较并保留更好的版本
+          const existing = normalizedPathMap.get(normalizedPath)!;
+          const currentName = result.app?.name || result.displayName;
+          const existingName = existing.app?.name || existing.displayName;
+          
+          // 优先保留名称不包含 .lnk 后缀的（更简洁）
+          const currentHasLnkSuffix = currentName.toLowerCase().endsWith('.lnk');
+          const existingHasLnkSuffix = existingName.toLowerCase().endsWith('.lnk');
+          
+          if (!currentHasLnkSuffix && existingHasLnkSuffix) {
+            normalizedPathMap.set(normalizedPath, result);
+          }
+          // 如果名称后缀相同，优先保留有图标的
+          else if (currentHasLnkSuffix === existingHasLnkSuffix) {
+            if (result.app?.icon && !existing.app?.icon) {
+              normalizedPathMap.set(normalizedPath, result);
+            }
+          }
+        }
+      }
+    }
+    
+    const deduplicatedExecutableResults = Array.from(normalizedPathMap.values());
     const pluginResults = allResults.filter(result => result.type === "plugin");
-    const horizontal = [...executableResults, ...pluginResults];
+    const horizontal = [...deduplicatedExecutableResults, ...pluginResults];
+    
     const vertical = allResults.filter(result => {
       // Not an executable app and not a plugin
       if (result.type === "app") {
@@ -1816,6 +1853,7 @@ export function LauncherWindow() {
     if (queryRef.current.trim() === "" && allResults.length === 0) {
       setResults([]);
       setHorizontalResults([]);
+      console.log('[horizontalResults] 清空横向结果 (查询为空)');
       setVerticalResults([]);
       horizontalResultsRef.current = [];
       setSelectedHorizontalIndex(null);
@@ -1830,6 +1868,7 @@ export function LauncherWindow() {
       // 清空结果，避免显示旧查询的结果
       setResults([]);
       setHorizontalResults([]);
+      console.log('[horizontalResults] 清空横向结果 (结果为空)');
       setVerticalResults([]);
       horizontalResultsRef.current = [];
       setSelectedHorizontalIndex(null);
@@ -1858,6 +1897,20 @@ export function LauncherWindow() {
         : (hasExistingHorizontal ? currentHorizontalRef : []);
       setResults(allResults);
       setHorizontalResults(finalHorizontal);
+      // 打印横向结果列表
+      console.log('[horizontalResults] 设置横向结果:', finalHorizontal);
+      console.log('[horizontalResults] 数量:', finalHorizontal.length);
+      finalHorizontal.forEach((result, index) => {
+        console.log(`[horizontalResults] [${index}]`, {
+          type: result.type,
+          displayName: result.displayName,
+          path: result.path,
+          app: result.app ? {
+            name: result.app.name,
+            path: result.app.path,
+          } : undefined,
+        });
+      });
       setVerticalResults(vertical);
       // 更新ref以跟踪当前的横向结果
       horizontalResultsRef.current = finalHorizontal;
@@ -1892,6 +1945,20 @@ export function LauncherWindow() {
       setResults(initialResults);
       // Split the initial results too
       setHorizontalResults(finalHorizontal);
+      // 打印横向结果列表
+      console.log('[horizontalResults] 设置横向结果 (增量加载):', finalHorizontal);
+      console.log('[horizontalResults] 数量:', finalHorizontal.length);
+      finalHorizontal.forEach((result, index) => {
+        console.log(`[horizontalResults] [${index}]`, {
+          type: result.type,
+          displayName: result.displayName,
+          path: result.path,
+          app: result.app ? {
+            name: result.app.name,
+            path: result.app.path,
+          } : undefined,
+        });
+      });
       setVerticalResults(finalVertical);
       // 更新ref以跟踪当前的横向结果
       horizontalResultsRef.current = finalHorizontal;
@@ -1914,6 +1981,7 @@ export function LauncherWindow() {
         // 结果已过时或查询已清空，停止加载
         setResults([]);
         setHorizontalResults([]);
+        console.log('[horizontalResults] 清空横向结果 (结果已过时或查询已清空)');
         setVerticalResults([]);
         setSelectedHorizontalIndex(null);
         setSelectedVerticalIndex(null);
@@ -1937,10 +2005,25 @@ export function LauncherWindow() {
           setVerticalResults(currentVertical);
           // 更新ref以跟踪当前的横向结果
           horizontalResultsRef.current = currentHorizontal;
+          // 打印横向结果列表（增量加载中）
+          console.log('[horizontalResults] 增量更新横向结果:', currentHorizontal);
+          console.log('[horizontalResults] 数量:', currentHorizontal.length);
+          currentHorizontal.forEach((result, index) => {
+            console.log(`[horizontalResults] [${index}]`, {
+              type: result.type,
+              displayName: result.displayName,
+              path: result.path,
+              app: result.app ? {
+                name: result.app.name,
+                path: result.app.path,
+              } : undefined,
+            });
+          });
         } else {
           // 结果已过时，停止加载
           setResults([]);
           setHorizontalResults([]);
+          console.log('[horizontalResults] 清空横向结果 (增量加载中结果已过时)');
           setVerticalResults([]);
           incrementalLoadRef.current = null;
           incrementalTimeoutRef.current = null;
@@ -1991,6 +2074,7 @@ export function LauncherWindow() {
     if (query.trim() === "" && !aiAnswer) {
       setResults([]);
       setHorizontalResults([]);
+      console.log('[horizontalResults] 清空横向结果 (useEffect: 查询为空)');
       setVerticalResults([]);
       setSelectedHorizontalIndex(null);
       setSelectedVerticalIndex(null);
@@ -2013,6 +2097,10 @@ export function LauncherWindow() {
     if (query.trim() !== lastQueryInEffectRef.current.trim()) {
       setResults([]);
       setHorizontalResults([]);
+      console.log('[horizontalResults] 清空横向结果 (useEffect: 查询变化)', {
+        oldQuery: lastQueryInEffectRef.current,
+        newQuery: query,
+      });
       setVerticalResults([]);
       setSelectedHorizontalIndex(null);
       setSelectedVerticalIndex(null);
