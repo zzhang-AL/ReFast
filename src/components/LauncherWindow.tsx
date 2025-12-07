@@ -21,6 +21,9 @@ import {
   calculateRelevanceScore,
 } from "../utils/launcherUtils";
 import { getThemeConfig, getLayoutConfig, type ResultStyle } from "../utils/themeConfig";
+import { handleEscapeKey, closePluginModalAndHide, closeMemoModalAndHide } from "../utils/launcherHandlers";
+import { clearAllResults, resetSelectedIndices, selectFirstHorizontal, selectFirstVertical } from "../utils/resultUtils";
+import { adjustWindowSize, getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
 
 type SearchResult = {
   type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
@@ -129,7 +132,7 @@ export function LauncherWindow() {
   const isAutoSelectingFirstHorizontalRef = useRef(false); // 标记是否正在自动选择第一个横向结果（用于防止scrollIntoView）
   const justJumpedToVerticalRef = useRef(false); // 标记是否刚刚从横向跳转到纵向（用于防止results useEffect重置selectedIndex）
 
-  const getMainContainer = () => containerRef.current || (document.querySelector('.bg-white') as HTMLElement | null);
+  const getMainContainer = () => containerRef.current || getMainContainerUtil();
 
   useEffect(() => {
     isMemoModalOpenRef.current = isMemoModalOpen;
@@ -654,34 +657,16 @@ export function LauncherWindow() {
     
     // Global keyboard listener for Escape key and Arrow keys
     const handleGlobalKeyDown = async (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.keyCode === 27) {
-        e.preventDefault();
-        e.stopPropagation();
-        // 如果应用中心弹窗已打开，关闭应用中心并隐藏窗口（插件像独立软件一样运行）
-        if (isPluginListModalOpenRef.current) {
-          setIsPluginListModalOpen(false);
-          // 延迟隐藏窗口，让关闭动画完成
-          setTimeout(() => {
-            hideLauncherAndResetState();
-          }, 100);
-          return;
-        }
-        // 如果备忘录弹窗已打开，关闭备忘录并隐藏窗口（插件像独立软件一样运行）
-        if (isMemoModalOpenRef.current) {
-          resetMemoState();
-          // 延迟隐藏窗口，让关闭动画完成
-          setTimeout(() => {
-            hideLauncherAndResetState();
-          }, 100);
-          return;
-        }
-        // 如果正在显示 AI 回答，退出 AI 回答模式
-        if (showAiAnswer) {
-          setShowAiAnswer(false);
-          setAiAnswer(null);
-          return;
-        }
-        await hideLauncherAndResetState({ resetMemo: true });
+      if (handleEscapeKey(e, {
+        isPluginListModalOpen: () => isPluginListModalOpenRef.current,
+        isMemoModalOpen: () => isMemoModalOpenRef.current,
+        showAiAnswer,
+        setIsPluginListModalOpen,
+        resetMemoState,
+        setShowAiAnswer,
+        setAiAnswer,
+        hideLauncherAndResetState,
+      })) {
         return;
       }
       
@@ -749,7 +734,7 @@ export function LauncherWindow() {
             }
           }, 100);
         }
-      } else if (!focused) {
+        } else if (!focused) {
         if (isWindowDraggingRef.current) {
           return;
         }
@@ -759,18 +744,12 @@ export function LauncherWindow() {
         // 当窗口失去焦点时，自动关闭搜索框
         // 如果应用中心弹窗已打开，关闭应用中心并隐藏窗口
         if (isPluginListModalOpenRef.current) {
-          setIsPluginListModalOpen(false);
-          setTimeout(() => {
-            hideLauncherAndResetState();
-          }, 100);
+          closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
           return;
         }
         // 如果备忘录弹窗已打开，关闭备忘录并隐藏窗口
         if (isMemoModalOpenRef.current) {
-          resetMemoState();
-          setTimeout(() => {
-            hideLauncherAndResetState();
-          }, 100);
+          closeMemoModalAndHide(resetMemoState, hideLauncherAndResetState);
           return;
         }
         // 隐藏窗口并重置所有状态
@@ -1851,14 +1830,16 @@ export function LauncherWindow() {
 
     // 如果 query 为空且没有结果（包括 AI 回答），直接清空结果并返回
     if (queryRef.current.trim() === "" && allResults.length === 0) {
-      setResults([]);
-      setHorizontalResults([]);
-      console.log('[horizontalResults] 清空横向结果 (查询为空)');
-      setVerticalResults([]);
-      horizontalResultsRef.current = [];
-      setSelectedHorizontalIndex(null);
-      setSelectedVerticalIndex(null);
-      currentLoadResultsRef.current = [];
+      clearAllResults({
+        setResults,
+        setHorizontalResults,
+        setVerticalResults,
+        setSelectedHorizontalIndex,
+        setSelectedVerticalIndex,
+        horizontalResultsRef,
+        currentLoadResultsRef,
+        logMessage: '[horizontalResults] 清空横向结果 (查询为空)',
+      });
       return;
     }
 
@@ -1866,14 +1847,16 @@ export function LauncherWindow() {
     // 在这种情况下，清空旧结果，等待新的 combinedResults 更新
     if (queryRef.current.trim() !== "" && allResults.length === 0) {
       // 清空结果，避免显示旧查询的结果
-      setResults([]);
-      setHorizontalResults([]);
-      console.log('[horizontalResults] 清空横向结果 (结果为空)');
-      setVerticalResults([]);
-      horizontalResultsRef.current = [];
-      setSelectedHorizontalIndex(null);
-      setSelectedVerticalIndex(null);
-      currentLoadResultsRef.current = [];
+      clearAllResults({
+        setResults,
+        setHorizontalResults,
+        setVerticalResults,
+        setSelectedHorizontalIndex,
+        setSelectedVerticalIndex,
+        horizontalResultsRef,
+        currentLoadResultsRef,
+        logMessage: '[horizontalResults] 清空横向结果 (结果为空)',
+      });
       return;
     }
 
@@ -1979,15 +1962,17 @@ export function LauncherWindow() {
       if (queryRef.current.trim() === "" || 
           currentLoadResultsRef.current !== allResults) {
         // 结果已过时或查询已清空，停止加载
-        setResults([]);
-        setHorizontalResults([]);
-        console.log('[horizontalResults] 清空横向结果 (结果已过时或查询已清空)');
-        setVerticalResults([]);
-        setSelectedHorizontalIndex(null);
-        setSelectedVerticalIndex(null);
+        clearAllResults({
+          setResults,
+          setHorizontalResults,
+          setVerticalResults,
+          setSelectedHorizontalIndex,
+          setSelectedVerticalIndex,
+          currentLoadResultsRef,
+          logMessage: '[horizontalResults] 清空横向结果 (结果已过时或查询已清空)',
+        });
         incrementalLoadRef.current = null;
         incrementalTimeoutRef.current = null;
-        currentLoadResultsRef.current = [];
         return;
       }
 
@@ -2021,13 +2006,17 @@ export function LauncherWindow() {
           });
         } else {
           // 结果已过时，停止加载
-          setResults([]);
-          setHorizontalResults([]);
-          console.log('[horizontalResults] 清空横向结果 (增量加载中结果已过时)');
-          setVerticalResults([]);
+          clearAllResults({
+            setResults,
+            setHorizontalResults,
+            setVerticalResults,
+            setSelectedHorizontalIndex,
+            setSelectedVerticalIndex,
+            currentLoadResultsRef,
+            logMessage: '[horizontalResults] 清空横向结果 (增量加载中结果已过时)',
+          });
           incrementalLoadRef.current = null;
           incrementalTimeoutRef.current = null;
-          currentLoadResultsRef.current = [];
           return;
         }
         
@@ -2095,15 +2084,15 @@ export function LauncherWindow() {
     // 如果查询变化了，立即清空旧结果，避免显示错误的结果
     // 这样可以确保在 combinedResults 更新之前，不会显示旧查询的结果
     if (query.trim() !== lastQueryInEffectRef.current.trim()) {
-      setResults([]);
-      setHorizontalResults([]);
-      console.log('[horizontalResults] 清空横向结果 (useEffect: 查询变化)', {
-        oldQuery: lastQueryInEffectRef.current,
-        newQuery: query,
+      clearAllResults({
+        setResults,
+        setHorizontalResults,
+        setVerticalResults,
+        setSelectedHorizontalIndex,
+        setSelectedVerticalIndex,
+        currentLoadResultsRef,
+        logMessage: `[horizontalResults] 清空横向结果 (useEffect: 查询变化) oldQuery: ${lastQueryInEffectRef.current}, newQuery: ${query}`,
       });
-      setVerticalResults([]);
-      setSelectedHorizontalIndex(null);
-      setSelectedVerticalIndex(null);
       // 取消所有增量加载任务
       if (incrementalLoadRef.current !== null) {
         cancelAnimationFrame(incrementalLoadRef.current);
@@ -2113,7 +2102,6 @@ export function LauncherWindow() {
         clearTimeout(incrementalTimeoutRef.current);
         incrementalTimeoutRef.current = null;
       }
-      currentLoadResultsRef.current = [];
       lastQueryInEffectRef.current = query;
     }
     // 使用分批加载来更新结果，避免一次性渲染大量DOM导致卡顿
@@ -2307,31 +2295,14 @@ export function LauncherWindow() {
       return;
     }
     
-    const adjustWindowSize = () => {
-      const window = getCurrentWindow();
-      const whiteContainer = getMainContainer();
-      if (whiteContainer) {
-        let containerHeight = whiteContainer.scrollHeight;
-
-        // 剪切板 URL 弹窗时，确保窗口高度也能完整容纳弹窗
-        if (clipboardUrlToOpen) {
-          const clipboardModal = document.querySelector('.clipboard-url-modal') as HTMLElement | null;
-          if (clipboardModal) {
-            const modalRect = clipboardModal.getBoundingClientRect();
-            const modalHeightWithMargin = modalRect.height + 32;
-            containerHeight = Math.max(containerHeight, modalHeightWithMargin);
-          }
-        }
-
-        // 剪切板链接弹窗出现时，提高主界面整体高度上限/下限
-        const MAX_HEIGHT = clipboardUrlToOpen ? 720 : 600;
-        const MIN_HEIGHT = clipboardUrlToOpen ? 260 : 200;
-        const targetHeight = Math.max(MIN_HEIGHT, Math.min(containerHeight, MAX_HEIGHT));
-        window.setSize(new LogicalSize(windowWidth, targetHeight)).catch(console.error);
-      }
-    };
-    
-    setTimeout(adjustWindowSize, 50);
+    setTimeout(() => {
+      adjustWindowSize({
+        windowWidth,
+        clipboardUrlToOpen,
+        isMemoModalOpen,
+        getContainer: getMainContainer,
+      });
+    }, 50);
   }, [windowWidth, isMemoModalOpen, isPluginListModalOpen, isResizing, clipboardUrlToOpen]);
 
   // Handle window width resizing
@@ -3650,15 +3621,13 @@ export function LauncherWindow() {
       
       // 如果输入框有焦点，且有横向结果，则选中第一个横向结果
       if (isInputFocused && horizontalResults.length > 0) {
-        setSelectedHorizontalIndex(0);
-        setSelectedVerticalIndex(null);
+        selectFirstHorizontal(setSelectedHorizontalIndex, setSelectedVerticalIndex);
         return;
       }
       
       // 如果输入框有焦点，且有纵向结果，则选中第一个纵向结果
       if (isInputFocused && verticalResults.length > 0) {
-        setSelectedHorizontalIndex(null);
-        setSelectedVerticalIndex(0);
+        selectFirstVertical(setSelectedHorizontalIndex, setSelectedVerticalIndex);
         return;
       }
       
@@ -3676,8 +3645,7 @@ export function LauncherWindow() {
           const length = inputRef.current.value.length;
           inputRef.current.setSelectionRange(length, length);
         }
-        setSelectedHorizontalIndex(null);
-        setSelectedVerticalIndex(null);
+        resetSelectedIndices(setSelectedHorizontalIndex, setSelectedVerticalIndex);
         return;
       }
       
@@ -3685,8 +3653,7 @@ export function LauncherWindow() {
       if (selectedVerticalIndex === 0) {
         if (horizontalResults.length > 0) {
           // Jump to first horizontal result
-          setSelectedHorizontalIndex(0);
-          setSelectedVerticalIndex(null);
+          selectFirstHorizontal(setSelectedHorizontalIndex, setSelectedVerticalIndex);
           return;
         } else {
           // Focus input
@@ -3695,8 +3662,7 @@ export function LauncherWindow() {
             const length = inputRef.current.value.length;
             inputRef.current.setSelectionRange(length, length);
           }
-          setSelectedHorizontalIndex(null);
-          setSelectedVerticalIndex(null);
+          resetSelectedIndices(setSelectedHorizontalIndex, setSelectedVerticalIndex);
           return;
         }
       }
@@ -5459,11 +5425,7 @@ export function LauncherWindow() {
               <h2 className="text-lg font-semibold text-gray-800">应用中心</h2>
               <button
                 onClick={async () => {
-                  setIsPluginListModalOpen(false);
-                  // 延迟隐藏窗口，让关闭动画完成（插件像独立软件一样运行）
-                  setTimeout(() => {
-                    hideLauncherAndResetState();
-                  }, 100);
+                  closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
                 }}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
               >
@@ -5496,10 +5458,7 @@ export function LauncherWindow() {
                   }, 100);
                 }}
                 onClose={async () => {
-                  setIsPluginListModalOpen(false);
-                  setTimeout(() => {
-                    hideLauncherAndResetState();
-                  }, 100);
+                  closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
                 }}
               />
             </div>
