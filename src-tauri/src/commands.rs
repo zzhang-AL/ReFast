@@ -526,17 +526,21 @@ pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
         // 创建通道用于传递进度信息（使用标准库通道，因为需要在阻塞线程中使用）
         let (tx, rx) = std::sync::mpsc::channel::<(u8, String)>();
         
-        // 启动进度监听任务
-        let window_for_progress = window_clone.clone();
+        // 启动进度监听任务，向所有可能的窗口发送事件
+        let windows_for_progress: Vec<_> = windows_to_notify.iter().map(|w| w.clone()).collect();
         async_runtime::spawn(async move {
             // 在异步上下文中轮询接收进度信息
             loop {
                 match rx.recv_timeout(Duration::from_millis(100)) {
                     Ok((progress, message)) => {
-                        let _ = window_for_progress.emit("app-rescan-progress", &serde_json::json!({
+                        let event_data = serde_json::json!({
                             "progress": progress,
                             "message": message
-                        }));
+                        });
+                        // 向所有可能的窗口发送进度事件
+                        for window in &windows_for_progress {
+                            let _ = window.emit("app-rescan-progress", &event_data);
+                        }
                         if progress >= 100 {
                             break;
                         }
@@ -578,22 +582,32 @@ pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
         })
         .await;
         
-        // 在异步上下文中发送事件
+        // 在异步上下文中发送事件到所有可能的窗口
+        let windows_for_result: Vec<_> = windows_to_notify.iter().map(|w| w.clone()).collect();
         match scan_result {
             Ok(Ok(apps)) => {
-                let _ = window_clone.emit("app-rescan-complete", &serde_json::json!({
+                let event_data = serde_json::json!({
                     "apps": apps
-                }));
+                });
+                for window in &windows_for_result {
+                    let _ = window.emit("app-rescan-complete", &event_data);
+                }
             }
             Ok(Err(e)) => {
-                let _ = window_clone.emit("app-rescan-error", &serde_json::json!({
+                let event_data = serde_json::json!({
                     "error": e
-                }));
+                });
+                for window in &windows_for_result {
+                    let _ = window.emit("app-rescan-error", &event_data);
+                }
             }
             Err(e) => {
-                let _ = window_clone.emit("app-rescan-error", &serde_json::json!({
+                let event_data = serde_json::json!({
                     "error": format!("扫描任务失败: {}", e)
-                }));
+                });
+                for window in &windows_for_result {
+                    let _ = window.emit("app-rescan-error", &event_data);
+                }
             }
         }
     });

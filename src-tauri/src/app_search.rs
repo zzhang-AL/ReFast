@@ -64,7 +64,7 @@ pub mod windows {
     }
 
     // Windows-specific implementation
-    pub fn scan_start_menu() -> Result<Vec<AppInfo>, String> {
+    pub fn scan_start_menu(tx: Option<std::sync::mpsc::Sender<(u8, String)>>) -> Result<Vec<AppInfo>, String> {
         let mut apps = Vec::new();
 
         // Common start menu paths - scan user, local user, and system start menus
@@ -91,9 +91,21 @@ pub mod windows {
                 .map(|p| PathBuf::from(p).join("Desktop")),
         ];
 
+        if let Some(ref tx) = tx {
+            let _ = tx.send((5, "开始扫描应用...".to_string()));
+        }
+
         // Scan start menu paths
-        for start_menu_path in start_menu_paths.into_iter().flatten() {
+        let start_menu_count = start_menu_paths.len();
+        for (idx, start_menu_path) in start_menu_paths.into_iter().flatten().enumerate() {
             if start_menu_path.exists() {
+                if let Some(ref tx) = tx {
+                    let path_name = start_menu_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("开始菜单")
+                        .to_string();
+                    let _ = tx.send((10 + (idx as u8 * 15), format!("正在扫描: {}", path_name)));
+                }
                 // Start scanning from depth 0, limit to 3 levels for better coverage
                 if let Err(e) = scan_directory(&start_menu_path, &mut apps, 0) {
                     eprintln!("[DEBUG] Error scanning {:?}: {}", start_menu_path, e);
@@ -107,6 +119,9 @@ pub mod windows {
         }
 
         // Scan desktop paths (only scan depth 0 for desktop, no recursion)
+        if let Some(ref tx) = tx {
+            let _ = tx.send((60, "正在扫描桌面...".to_string()));
+        }
         for desktop_path in desktop_paths.into_iter().flatten() {
             if desktop_path.exists() {
                 if let Err(e) = scan_directory(&desktop_path, &mut apps, 0) {
@@ -121,6 +136,9 @@ pub mod windows {
         }
 
         // Scan Microsoft Store / UWP apps via Get-StartApps (shell:AppsFolder targets)
+        if let Some(ref tx) = tx {
+            let _ = tx.send((70, "正在扫描 Microsoft Store 应用...".to_string()));
+        }
         match scan_uwp_apps() {
             Ok(mut uwp_apps) => {
                 let before = apps.len();
@@ -137,6 +155,10 @@ pub mod windows {
         }
 
         eprintln!("[DEBUG] Total apps found before dedup: {}", apps.len());
+
+        if let Some(ref tx) = tx {
+            let _ = tx.send((80, format!("找到 {} 个应用，正在去重...", apps.len())));
+        }
 
         // Remove duplicates based on path (more accurate than name)
         apps.sort_by(|a, b| a.path.cmp(&b.path));
@@ -174,11 +196,19 @@ pub mod windows {
 
         eprintln!("[DEBUG] Total apps after dedup: {}", apps.len());
         
+        if let Some(ref tx) = tx {
+            let _ = tx.send((95, format!("去重完成，共 {} 个应用", apps.len())));
+        }
+        
         // Debug: Check if Cursor is in the list
         if let Some(cursor_app) = apps.iter().find(|a| a.name.to_lowercase().contains("cursor")) {
             eprintln!("[DEBUG] Found Cursor: name={}, path={}", cursor_app.name, cursor_app.path);
         } else {
             eprintln!("[DEBUG] Cursor not found in scanned apps");
+        }
+
+        if let Some(ref tx) = tx {
+            let _ = tx.send((100, "扫描完成".to_string()));
         }
 
         Ok(apps)
