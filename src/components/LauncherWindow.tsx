@@ -106,6 +106,7 @@ export function LauncherWindow() {
   const resizeRafId = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const horizontalScrollContainerRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isWindowDraggingRef = useRef(false);
@@ -2346,6 +2347,87 @@ export function LauncherWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedVerticalIndex]); // 只依赖 selectedVerticalIndex，避免在结果更新时触发滚动
 
+  // Scroll selected horizontal item into view
+  useEffect(() => {
+    // Only scroll for horizontal results
+    if (horizontalScrollContainerRef.current && selectedHorizontalIndex !== null && horizontalResults.length > 0 && selectedHorizontalIndex >= 0) {
+      const container = horizontalScrollContainerRef.current;
+      
+      // Use double requestAnimationFrame to ensure DOM is fully updated after state change
+      // This is especially important when jumping from vertical to horizontal results
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!container) return;
+
+          // Find the selected item element
+          const item = container.children[selectedHorizontalIndex] as HTMLElement;
+          
+          if (!item) {
+            return;
+          }
+
+          // Use getBoundingClientRect to get actual rendered position (including transforms like scale)
+          const containerRect = container.getBoundingClientRect();
+          const itemRect = item.getBoundingClientRect();
+          
+          // For first item (index 0), ensure it's fully visible even when scaled
+          if (selectedHorizontalIndex === 0) {
+            // Scroll to position 0 to show the first item
+            container.scrollTo({
+              left: 0,
+              behavior: "smooth",
+            });
+            return;
+          }
+          
+          // Calculate item's position relative to container's scrollable content
+          // itemRect.left - containerRect.left gives position relative to visible area
+          // Add container.scrollLeft to get absolute position in scrollable content
+          const itemLeftRelative = itemRect.left - containerRect.left + container.scrollLeft;
+          const itemWidth = itemRect.width;
+          const itemRightRelative = itemLeftRelative + itemWidth;
+          
+          const containerScrollLeft = container.scrollLeft;
+          const containerWidth = container.clientWidth;
+          const visibleLeft = containerScrollLeft;
+          const visibleRight = containerScrollLeft + containerWidth;
+          
+          // Only scroll if item is not fully visible
+          if (itemLeftRelative < visibleLeft || itemRightRelative > visibleRight) {
+            const padding = 8; // Small padding for visual spacing
+            let targetScroll = containerScrollLeft;
+            
+            if (itemLeftRelative < visibleLeft) {
+              // Item is to the left of visible area - scroll left to show it
+              targetScroll = itemLeftRelative - padding;
+            } else if (itemRightRelative > visibleRight) {
+              // Item is to the right of visible area - scroll right to show it
+              const scrollNeeded = itemRightRelative - visibleRight + padding;
+              targetScroll = containerScrollLeft + scrollNeeded;
+            }
+            
+            // Ensure we don't scroll past the left
+            if (targetScroll < 0) {
+              targetScroll = 0;
+            }
+            
+            // Ensure we don't scroll past the right
+            const maxScroll = container.scrollWidth - containerWidth;
+            if (targetScroll > maxScroll) {
+              targetScroll = maxScroll;
+            }
+            
+            container.scrollTo({
+              left: targetScroll,
+              behavior: "smooth",
+            });
+          }
+        });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHorizontalIndex]); // 只依赖 selectedHorizontalIndex
+
   const loadApplications = async (forceRescan: boolean = false) => {
     try {
       setIsLoading(true);
@@ -3255,11 +3337,11 @@ export function LauncherWindow() {
         return;
       }
       
-      // If we're at the first vertical result, focus back to input or jump to last horizontal
+      // If we're at the first vertical result, focus back to input or jump to first horizontal
       if (selectedVerticalIndex === 0) {
         if (horizontalResults.length > 0) {
-          // Jump to last horizontal result
-          setSelectedHorizontalIndex(horizontalResults.length - 1);
+          // Jump to first horizontal result
+          setSelectedHorizontalIndex(0);
           setSelectedVerticalIndex(null);
           return;
         } else {
@@ -3716,6 +3798,7 @@ export function LauncherWindow() {
                     {horizontalResults.length > 0 && (
                       <div className="px-4 py-3 mb-2 border-b border-gray-200">
                         <div 
+                          ref={horizontalScrollContainerRef}
                           className="flex gap-3 overflow-x-auto pb-2 executable-scroll-container"
                           style={{ 
                             scrollbarWidth: 'none', // Firefox
@@ -3745,6 +3828,7 @@ export function LauncherWindow() {
                                 }`}
                                 style={{
                                   animation: `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
+                                  marginLeft: execIndex === 0 && isSelected ? '8px' : '0px', // Add left margin when first item is selected to prevent cut-off when scaled
                                 }}
                               >
                                 {isSelected && (
