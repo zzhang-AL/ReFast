@@ -488,7 +488,7 @@ pub async fn scan_applications(app: tauri::AppHandle) -> Result<Vec<app_search::
         }
 
         // Scan applications (potentially slow) on background thread
-        let apps = app_search::windows::scan_start_menu()?;
+        let apps = app_search::windows::scan_start_menu(None)?;
 
         // Cache the results
         *cache_guard = Some(apps.clone());
@@ -505,16 +505,54 @@ pub async fn scan_applications(app: tauri::AppHandle) -> Result<Vec<app_search::
 
 #[tauri::command]
 pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("launcher")
-        .or_else(|| app.get_webview_window("main"))
-        .ok_or_else(|| "无法获取窗口".to_string())?;
+    // 获取所有可能的窗口，应用中心可能在启动器窗口或独立窗口中
+    let windows_to_notify: Vec<_> = vec![
+        app.get_webview_window("launcher"),
+        app.get_webview_window("plugin-list-window"),
+        app.get_webview_window("main"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    
+    if windows_to_notify.is_empty() {
+        return Err("无法获取窗口".to_string());
+    }
     
     let app_clone = app.clone();
-    let window_clone = window.clone();
     
     // 立即返回，在后台执行扫描
     async_runtime::spawn(async move {
+        // 创建通道用于传递进度信息（使用标准库通道，因为需要在阻塞线程中使用）
+        let (tx, rx) = std::sync::mpsc::channel::<(u8, String)>();
+        
+        // 启动进度监听任务
+        let window_for_progress = window_clone.clone();
+        async_runtime::spawn(async move {
+            // 在异步上下文中轮询接收进度信息
+            loop {
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok((progress, message)) => {
+                        let _ = window_for_progress.emit("app-rescan-progress", &serde_json::json!({
+                            "progress": progress,
+                            "message": message
+                        }));
+                        if progress >= 100 {
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // 超时，继续等待
+                        continue;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        // 发送端已关闭
+                        break;
+                    }
+                }
+            }
+        });
+        
         let scan_result = async_runtime::spawn_blocking(move || -> Result<Vec<app_search::AppInfo>, String> {
             let cache = APP_CACHE.clone();
             let mut cache_guard = cache.lock().map_err(|e| format!("锁定缓存失败: {}", e))?;
@@ -527,8 +565,8 @@ pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
             let cache_file = app_search::windows::get_cache_file_path(&app_data_dir);
             let _ = fs::remove_file(&cache_file); // Ignore errors if file doesn't exist
 
-            // Force rescan
-            let apps = app_search::windows::scan_start_menu()?;
+            // Force rescan with progress callback
+            let apps = app_search::windows::scan_start_menu(Some(tx))?;
 
             // Cache the results
             *cache_guard = Some(apps.clone());

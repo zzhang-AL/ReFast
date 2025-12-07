@@ -2,6 +2,145 @@ import { useState, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
+// 翻译服务提供商
+type TranslationProvider = "baidu" | "youdao" | "google" | "sogou";
+
+// 翻译服务配置
+const TRANSLATION_SERVICES: Record<
+  TranslationProvider,
+  {
+    name: string;
+    url: string;
+    buildUrl: (from: string, to: string, text?: string) => string;
+    description: string;
+  }
+> = {
+  baidu: {
+    name: "百度翻译",
+    url: "https://fanyi.baidu.com/",
+    buildUrl: (from, to, text) => {
+      // 百度翻译 URL 参数
+      const langMap: Record<string, string> = {
+        auto: "auto",
+        zh: "zh",
+        en: "en",
+        ja: "jp",
+        ko: "kor",
+        fr: "fra",
+        de: "de",
+        es: "spa",
+        ru: "ru",
+        pt: "pt",
+        it: "it",
+        ar: "ara",
+        th: "th",
+        vi: "vie",
+      };
+      const fromCode = langMap[from] || from;
+      const toCode = langMap[to] || to;
+      // 百度翻译使用 fromCode 和 toCode 构建 URL
+      let url = `https://fanyi.baidu.com/#${fromCode}/${toCode}/`;
+      if (text) {
+        url += encodeURIComponent(text);
+      }
+      return url;
+    },
+    description: "国内稳定，支持多种语言",
+  },
+  youdao: {
+    name: "有道翻译",
+    url: "https://fanyi.youdao.com/",
+    buildUrl: (from, to, text) => {
+      // 有道翻译 URL 参数
+      const langMap: Record<string, string> = {
+        auto: "AUTO",
+        zh: "zh-CHS",
+        en: "en",
+        ja: "ja",
+        ko: "ko",
+        fr: "fr",
+        de: "de",
+        es: "es",
+        ru: "ru",
+        pt: "pt",
+        it: "it",
+        ar: "ar",
+        th: "th",
+        vi: "vi",
+      };
+      const fromCode = langMap[from] || from;
+      const toCode = langMap[to] || to;
+      // 有道翻译使用 fromCode 和 toCode 构建 URL
+      let url = `https://fanyi.youdao.com/?keyfrom=dict2.top#${fromCode}/${toCode}/`;
+      if (text) {
+        url += encodeURIComponent(text);
+      }
+      return url;
+    },
+    description: "国内稳定，界面简洁",
+  },
+  google: {
+    name: "Google 翻译",
+    url: "https://translate.google.com/",
+    buildUrl: (from, to, text) => {
+      const langMap: Record<string, string> = {
+        auto: "auto",
+        zh: "zh-CN",
+        en: "en",
+        ja: "ja",
+        ko: "ko",
+        fr: "fr",
+        de: "de",
+        es: "es",
+        ru: "ru",
+        pt: "pt",
+        it: "it",
+        ar: "ar",
+        th: "th",
+        vi: "vi",
+      };
+      const fromCode = langMap[from] || from;
+      const toCode = langMap[to] || to;
+      let url = `https://translate.google.com/?sl=${fromCode}&tl=${toCode}`;
+      if (text) {
+        url += `&text=${encodeURIComponent(text)}`;
+      }
+      return url;
+    },
+    description: "国际服务，功能强大",
+  },
+  sogou: {
+    name: "搜狗翻译",
+    url: "https://fanyi.sogou.com/",
+    buildUrl: (from, to, text) => {
+      const langMap: Record<string, string> = {
+        auto: "auto",
+        zh: "zh-CHS",
+        en: "en",
+        ja: "ja",
+        ko: "ko",
+        fr: "fr",
+        de: "de",
+        es: "es",
+        ru: "ru",
+        pt: "pt",
+        it: "it",
+        ar: "ar",
+        th: "th",
+        vi: "vi",
+      };
+      const fromCode = langMap[from] || from;
+      const toCode = langMap[to] || to;
+      let url = `https://fanyi.sogou.com/?transfrom=${fromCode}&transto=${toCode}`;
+      if (text) {
+        url += `&query=${encodeURIComponent(text)}`;
+      }
+      return url;
+    },
+    description: "国内服务，速度快",
+  },
+};
+
 // 支持的语言列表
 const LANGUAGES = [
   { code: "auto", name: "自动检测" },
@@ -20,45 +159,25 @@ const LANGUAGES = [
   { code: "vi", name: "越南语" },
 ];
 
-// 使用免费的 Google Translate API（无需 API key）
-async function translateText(text: string, from: string, to: string): Promise<string> {
-  if (!text.trim()) {
-    return "";
-  }
-
-  try {
-    // 使用 Google Translate 的免费接口
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      throw new Error(`翻译请求失败: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    // 解析返回的数据
-    if (Array.isArray(data) && data[0] && Array.isArray(data[0])) {
-      const translatedParts = data[0].map((item: any[]) => item[0]).filter(Boolean);
-      return translatedParts.join("");
-    }
-    
-    throw new Error("翻译结果格式错误");
-  } catch (error) {
-    console.error("翻译错误:", error);
-    throw error;
-  }
-}
-
 export function TranslationWindow() {
-  const [sourceText, setSourceText] = useState("");
-  const [translatedText, setTranslatedText] = useState("");
   const [sourceLang, setSourceLang] = useState("auto");
   const [targetLang, setTargetLang] = useState("en");
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [detectedLang, setDetectedLang] = useState<string | null>(null);
-  const translateTimeoutRef = useRef<number | null>(null);
+  const [currentProvider, setCurrentProvider] = useState<TranslationProvider>("baidu");
+  const [iframeUrl, setIframeUrl] = useState("");
+  const [inputText, setInputText] = useState("");
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // 更新 iframe URL
+  const updateIframeUrl = (provider: TranslationProvider, from: string, to: string, text?: string) => {
+    const service = TRANSLATION_SERVICES[provider];
+    const url = service.buildUrl(from, to, text);
+    setIframeUrl(url);
+  };
+
+  // 初始化 iframe URL
+  useEffect(() => {
+    updateIframeUrl(currentProvider, sourceLang, targetLang);
+  }, [currentProvider, sourceLang, targetLang]);
 
   // 监听来自启动器的文本设置事件
   useEffect(() => {
@@ -69,9 +188,9 @@ export function TranslationWindow() {
         unlisten = await listen<string>("translation:set-text", (event) => {
           const text = event.payload;
           if (text) {
-            setSourceText(text);
-            // 自动翻译
-            handleTranslate(text, sourceLang, targetLang);
+            setInputText(text);
+            // 更新 iframe URL 以包含文本
+            updateIframeUrl(currentProvider, sourceLang, targetLang, text);
           }
         });
       } catch (error) {
@@ -86,107 +205,42 @@ export function TranslationWindow() {
         unlisten();
       }
     };
-  }, [sourceLang, targetLang]);
+  }, [currentProvider, sourceLang, targetLang]);
 
-  // 自动翻译（防抖）
+  // 当语言或服务改变时，如果有输入文本，更新 URL
   useEffect(() => {
-    if (translateTimeoutRef.current) {
-      clearTimeout(translateTimeoutRef.current);
+    if (inputText) {
+      updateIframeUrl(currentProvider, sourceLang, targetLang, inputText);
+    } else {
+      updateIframeUrl(currentProvider, sourceLang, targetLang);
     }
-
-    if (!sourceText.trim()) {
-      setTranslatedText("");
-      setError(null);
-      return;
-    }
-
-    translateTimeoutRef.current = window.setTimeout(() => {
-      handleTranslate(sourceText, sourceLang, targetLang);
-    }, 500); // 500ms 防抖
-
-    return () => {
-      if (translateTimeoutRef.current) {
-        clearTimeout(translateTimeoutRef.current);
-      }
-    };
-  }, [sourceText, sourceLang, targetLang]);
-
-  const handleTranslate = async (text: string, from: string, to: string) => {
-    if (!text.trim()) {
-      setTranslatedText("");
-      setError(null);
-      return;
-    }
-
-    setIsTranslating(true);
-    setError(null);
-    setDetectedLang(null);
-
-    try {
-      // 如果源语言是自动检测，先检测语言
-      let actualFrom = from;
-      if (from === "auto") {
-        // 使用 Google Translate 检测语言
-        try {
-          const detectUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`;
-          const detectResponse = await fetch(detectUrl);
-          if (detectResponse.ok) {
-            const detectData = await detectResponse.json();
-            if (detectData[2]) {
-              actualFrom = detectData[2];
-              setDetectedLang(actualFrom);
-            }
-          }
-        } catch (e) {
-          console.warn("语言检测失败，使用默认设置", e);
-        }
-      }
-
-      // 如果检测到的语言和目标语言相同，不进行翻译
-      if (actualFrom === to) {
-        setTranslatedText(text);
-        setIsTranslating(false);
-        return;
-      }
-
-      const result = await translateText(text, actualFrom, to);
-      setTranslatedText(result);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "翻译失败";
-      setError(errorMessage);
-      setTranslatedText("");
-    } finally {
-      setIsTranslating(false);
-    }
-  };
+  }, [sourceLang, targetLang, currentProvider, inputText]);
 
   const handleSwapLanguages = () => {
     const tempLang = sourceLang;
     setSourceLang(targetLang === "auto" ? "zh" : targetLang);
     setTargetLang(tempLang === "auto" ? "zh" : tempLang);
-    // 交换文本
-    const tempText = sourceText;
-    setSourceText(translatedText);
-    setTranslatedText(tempText);
   };
 
-  const handleCopySource = async () => {
-    if (sourceText) {
-      await navigator.clipboard.writeText(sourceText);
+  const handleProviderChange = (provider: TranslationProvider) => {
+    setCurrentProvider(provider);
+    if (inputText) {
+      updateIframeUrl(provider, sourceLang, targetLang, inputText);
+    } else {
+      updateIframeUrl(provider, sourceLang, targetLang);
     }
   };
 
-  const handleCopyTranslated = async () => {
-    if (translatedText) {
-      await navigator.clipboard.writeText(translatedText);
+  const handleRefresh = () => {
+    if (iframeRef.current) {
+      iframeRef.current.src = iframeRef.current.src;
     }
   };
 
-  const handleClear = () => {
-    setSourceText("");
-    setTranslatedText("");
-    setError(null);
-    setDetectedLang(null);
+  const handleOpenInBrowser = () => {
+    if (iframeUrl) {
+      window.open(iframeUrl, "_blank");
+    }
   };
 
   // ESC 键关闭窗口
@@ -212,17 +266,40 @@ export function TranslationWindow() {
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 shadow-sm">
         <h1 className="text-lg font-semibold text-gray-800">翻译工具</h1>
         <div className="flex items-center gap-2">
-          {detectedLang && (
-            <span className="text-xs text-gray-500">
-              检测到: {LANGUAGES.find((l) => l.code === detectedLang)?.name || detectedLang}
-            </span>
-          )}
           <button
-            onClick={handleClear}
+            onClick={handleRefresh}
             className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
+            title="刷新"
           >
-            清空
+            刷新
           </button>
+          <button
+            onClick={handleOpenInBrowser}
+            className="px-3 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+            title="在浏览器中打开"
+          >
+            新窗口
+          </button>
+        </div>
+      </div>
+
+      {/* 服务选择栏 */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200">
+        <div className="flex items-center gap-1">
+          {(Object.keys(TRANSLATION_SERVICES) as TranslationProvider[]).map((provider) => (
+            <button
+              key={provider}
+              onClick={() => handleProviderChange(provider)}
+              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                currentProvider === provider
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+              title={TRANSLATION_SERVICES[provider].description}
+            >
+              {TRANSLATION_SERVICES[provider].name}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -272,93 +349,60 @@ export function TranslationWindow() {
             </option>
           ))}
         </select>
+
+        <div className="flex-1" />
+        <span className="text-xs text-gray-500">
+          {TRANSLATION_SERVICES[currentProvider].description}
+        </span>
       </div>
 
-      {/* 主要内容区域 */}
-      <div className="flex-1 flex gap-4 p-4 overflow-hidden">
-        {/* 源文本区域 */}
-        <div className="flex-1 flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">
-              {LANGUAGES.find((l) => l.code === sourceLang)?.name || "源语言"}
-            </label>
-            <button
-              onClick={handleCopySource}
-              className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-              title="复制"
-            >
-              复制
-            </button>
-          </div>
-          <textarea
-            value={sourceText}
-            onChange={(e) => setSourceText(e.target.value)}
-            placeholder="输入要翻译的文本..."
-            className="flex-1 w-full px-4 py-3 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            style={{ fontFamily: "inherit" }}
+      {/* 快速输入栏（可选） */}
+      <div className="px-4 py-2 bg-gray-50 border-b border-gray-200">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && inputText) {
+                updateIframeUrl(currentProvider, sourceLang, targetLang, inputText);
+              }
+            }}
+            placeholder="快速输入文本并回车翻译..."
+            className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-        </div>
-
-        {/* 翻译结果区域 */}
-        <div className="flex-1 flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">
-              {LANGUAGES.find((l) => l.code === targetLang)?.name || "目标语言"}
-            </label>
+          {inputText && (
             <button
-              onClick={handleCopyTranslated}
+              onClick={() => {
+                setInputText("");
+                updateIframeUrl(currentProvider, sourceLang, targetLang);
+              }}
               className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-              title="复制"
             >
-              复制
+              清空
             </button>
-          </div>
-          <div className="flex-1 relative">
-            {isTranslating && (
-              <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 z-10">
-                <div className="flex items-center gap-2 text-gray-600">
-                  <svg
-                    className="animate-spin h-5 w-5"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                  <span className="text-sm">翻译中...</span>
-                </div>
-              </div>
-            )}
-            {error && (
-              <div className="absolute inset-0 flex items-center justify-center bg-red-50 border border-red-200 rounded-lg">
-                <div className="text-sm text-red-600 text-center px-4">
-                  {error}
-                </div>
-              </div>
-            )}
-            <textarea
-              value={translatedText}
-              readOnly
-              placeholder="翻译结果将显示在这里..."
-              className="w-full h-full px-4 py-3 text-sm border border-gray-300 rounded-lg resize-none bg-gray-50 focus:outline-none"
-              style={{ fontFamily: "inherit" }}
-            />
-          </div>
+          )}
         </div>
+      </div>
+
+      {/* iframe 翻译区域 */}
+      <div className="flex-1 relative overflow-hidden">
+        {iframeUrl && (
+          <iframe
+            ref={iframeRef}
+            src={iframeUrl}
+            className="w-full h-full border-0"
+            title="翻译工具"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+            allow="clipboard-read; clipboard-write"
+          />
+        )}
+        {!iframeUrl && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+            <div className="text-gray-500">正在加载翻译服务...</div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
-

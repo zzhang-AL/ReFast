@@ -1,0 +1,22 @@
+{
+  "id": "translation",
+  "name": "翻译工具",
+  "version": "1.0.0",
+  "description": "多语言翻译工具，支持自动检测语言",
+  "keywords": [
+    "翻译",
+    "fanyi",
+    "fy",
+    "translate",
+    "translation",
+    "多语言",
+    "duoyuyan",
+    "dyy",
+    "语言",
+    "yuyan",
+    "yy"
+  ],
+  "entry": "./index.ts",
+  "enabled": true
+}
+
