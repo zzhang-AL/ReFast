@@ -157,46 +157,52 @@ export function LauncherWindow() {
     const config = (() => {
       if (resultStyle === "soft") {
         return {
-          scrollbarSize: 20,
-          trackBg: "#f0f0f0",
-          trackBorder: "#e0e0e0",
-          thumbBg: "#a0a0a0",
-          thumbHover: "#888888",
-          thumbActive: "#707070",
-          thumbBorder: 4,
-          thumbBorderBg: "#f0f0f0",
-          thumbHoverBorder: "#f0f0f0",
-          thumbActiveBorder: "#f0f0f0",
+          scrollbarSize: 12,
+          trackBg: "linear-gradient(to bottom, rgba(245, 247, 250, 0.8), rgba(250, 251, 253, 0.9))",
+          trackBorder: "rgba(226, 232, 240, 0.9)",
+          thumbBg: "linear-gradient(to bottom, rgba(148, 163, 184, 0.7), rgba(100, 116, 139, 0.8))",
+          thumbHover: "linear-gradient(to bottom, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.95))",
+          thumbActive: "linear-gradient(to bottom, rgba(71, 85, 105, 0.95), rgba(51, 65, 85, 1))",
+          thumbBorder: 2.5,
+          thumbBorderBg: "rgba(255, 255, 255, 0.95)",
+          thumbHoverBorder: "rgba(255, 255, 255, 1)",
+          thumbActiveBorder: "rgba(255, 255, 255, 1)",
           minHeight: 40,
+          thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+          thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
         };
       }
       if (resultStyle === "skeuomorphic") {
         return {
-          scrollbarSize: 14,
-          trackBg: "#f6f8fb",
-          trackBorder: "#e3e9f1",
-          thumbBg: "#c5d0de",
-          thumbHover: "#b2c1d6",
-          thumbActive: "#9fb0c9",
-          thumbBorder: 3,
-          thumbBorderBg: "#f9fbfe",
-          thumbHoverBorder: "#eef3fa",
-          thumbActiveBorder: "#e3e9f3",
-          minHeight: 34,
+          scrollbarSize: 12,
+          trackBg: "linear-gradient(to bottom, rgba(246, 248, 251, 0.8), rgba(249, 251, 254, 0.95))",
+          trackBorder: "rgba(227, 233, 241, 0.95)",
+          thumbBg: "linear-gradient(to bottom, rgba(197, 208, 222, 0.75), rgba(178, 193, 214, 0.85))",
+          thumbHover: "linear-gradient(to bottom, rgba(178, 193, 214, 0.9), rgba(159, 176, 201, 0.98))",
+          thumbActive: "linear-gradient(to bottom, rgba(159, 176, 201, 0.98), rgba(139, 158, 186, 1))",
+          thumbBorder: 2.5,
+          thumbBorderBg: "rgba(249, 251, 254, 0.98)",
+          thumbHoverBorder: "rgba(238, 243, 250, 1)",
+          thumbActiveBorder: "rgba(227, 233, 243, 1)",
+          minHeight: 40,
+          thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6)",
+          thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7)",
         };
       }
       return {
         scrollbarSize: 12,
-        trackBg: "#f8f9fb",
-        trackBorder: "#eceff3",
-        thumbBg: "#b6beca",
-        thumbHover: "#9fa8b7",
-        thumbActive: "#8893a3",
-        thumbBorder: 3,
-        thumbBorderBg: "#f8f9fb",
-        thumbHoverBorder: "#f1f3f6",
-        thumbActiveBorder: "#e8ecf2",
-        minHeight: 32,
+        trackBg: "linear-gradient(to bottom, rgba(248, 250, 252, 0.8), rgba(251, 252, 254, 0.9))",
+        trackBorder: "rgba(226, 232, 240, 0.9)",
+        thumbBg: "linear-gradient(to bottom, rgba(148, 163, 184, 0.7), rgba(100, 116, 139, 0.8))",
+        thumbHover: "linear-gradient(to bottom, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.95))",
+        thumbActive: "linear-gradient(to bottom, rgba(71, 85, 105, 0.95), rgba(51, 65, 85, 1))",
+        thumbBorder: 2.5,
+        thumbBorderBg: "rgba(255, 255, 255, 0.95)",
+        thumbHoverBorder: "rgba(255, 255, 255, 1)",
+        thumbActiveBorder: "rgba(255, 255, 255, 1)",
+        minHeight: 40,
+        thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+        thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
       };
     })();
     
@@ -212,7 +218,9 @@ export function LauncherWindow() {
       style.id = styleId;
       style.textContent = `
         .results-list-scroll {
-          overflow-y: scroll !important;
+          overflow-y: auto !important;
+          scrollbar-width: thin !important;
+          scrollbar-color: rgba(148, 163, 184, 0.8) rgba(248, 250, 252, 0.8) !important;
         }
         
         .results-list-scroll::-webkit-scrollbar {
@@ -220,7 +228,7 @@ export function LauncherWindow() {
           height: ${config.scrollbarSize}px !important;
           display: block !important;
           -webkit-appearance: none !important;
-          background-color: transparent !important;
+          background: transparent !important;
         }
         
         .results-list-scroll::-webkit-scrollbar-button {
@@ -232,35 +240,86 @@ export function LauncherWindow() {
         .results-list-scroll::-webkit-scrollbar-track {
           background: ${config.trackBg} !important;
           border-left: 1px solid ${config.trackBorder} !important;
+          border-radius: 12px !important;
+          margin: 6px 2px !important;
+          opacity: 1 !important;
         }
         
         .results-list-scroll::-webkit-scrollbar-thumb {
-          background-color: ${config.thumbBg} !important;
-          border-radius: ${config.thumbBorder * 2}px !important;
+          background: ${config.thumbBg} !important;
+          border-radius: 12px !important;
           border: ${config.thumbBorder}px solid ${config.thumbBorderBg} !important;
-          background-clip: content-box !important;
+          background-clip: padding-box !important;
           min-height: ${config.minHeight}px !important;
-          transition: background-color 0.2s ease, box-shadow 0.2s ease !important;
-          box-shadow: none !important;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+          box-shadow: ${config.thumbShadow} !important;
+          opacity: 1 !important;
+          visibility: visible !important;
         }
         
         .results-list-scroll::-webkit-scrollbar-thumb:hover {
-          background-color: ${config.thumbHover} !important;
+          background: ${config.thumbHover} !important;
           border: ${config.thumbBorder}px solid ${config.thumbHoverBorder} !important;
-          box-shadow: none !important;
+          box-shadow: ${config.thumbHoverShadow} !important;
         }
         
         .results-list-scroll::-webkit-scrollbar-thumb:active {
-          background-color: ${config.thumbActive} !important;
+          background: ${config.thumbActive} !important;
           border: ${config.thumbBorder}px solid ${config.thumbActiveBorder} !important;
-          box-shadow: none !important;
+          box-shadow: ${config.thumbHoverShadow} !important;
         }
         
-        /* 隐藏可执行文件横向滚动条的滚动条 */
+        /* 可执行文件横向滚动条的滚动条样式 */
+        .executable-scroll-container {
+          overflow-x: auto !important;
+          scrollbar-width: thin !important;
+          scrollbar-color: rgba(148, 163, 184, 0.8) rgba(248, 250, 252, 0.8) !important;
+        }
+        
         .executable-scroll-container::-webkit-scrollbar {
+          height: ${config.scrollbarSize}px !important;
+          width: ${config.scrollbarSize}px !important;
+          display: block !important;
+          -webkit-appearance: none !important;
+          background: transparent !important;
+        }
+        
+        .executable-scroll-container::-webkit-scrollbar-button {
           display: none !important;
           width: 0 !important;
           height: 0 !important;
+        }
+        
+        .executable-scroll-container::-webkit-scrollbar-track {
+          background: ${config.trackBg} !important;
+          border-top: 1px solid ${config.trackBorder} !important;
+          border-radius: 12px !important;
+          margin: 2px 6px !important;
+          opacity: 1 !important;
+        }
+        
+        .executable-scroll-container::-webkit-scrollbar-thumb {
+          background: ${config.thumbBg} !important;
+          border-radius: 12px !important;
+          border: ${config.thumbBorder}px solid ${config.thumbBorderBg} !important;
+          background-clip: padding-box !important;
+          min-width: ${config.minHeight}px !important;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+          box-shadow: ${config.thumbShadow} !important;
+          opacity: 1 !important;
+          visibility: visible !important;
+        }
+        
+        .executable-scroll-container::-webkit-scrollbar-thumb:hover {
+          background: ${config.thumbHover} !important;
+          border: ${config.thumbBorder}px solid ${config.thumbHoverBorder} !important;
+          box-shadow: ${config.thumbHoverShadow} !important;
+        }
+        
+        .executable-scroll-container::-webkit-scrollbar-thumb:active {
+          background: ${config.thumbActive} !important;
+          border: ${config.thumbBorder}px solid ${config.thumbActiveBorder} !important;
+          box-shadow: ${config.thumbHoverShadow} !important;
         }
       `;
       document.head.appendChild(style);
@@ -4265,7 +4324,7 @@ export function LauncherWindow() {
             // 骨架屏：搜索中时显示，模拟结果列表样式
             <div
               ref={listRef}
-              className="flex-1 overflow-y-auto min-h-0 results-list-scroll"
+              className="flex-1 min-h-0 results-list-scroll"
               style={{ maxHeight: '500px' }}
             >
               {Array.from({ length: 8 }).map((_, index) => {
@@ -4303,7 +4362,7 @@ export function LauncherWindow() {
           ) : results.length > 0 ? (
             <div
               ref={listRef}
-              className="flex-1 overflow-y-auto min-h-0 results-list-scroll py-2"
+              className="flex-1 min-h-0 results-list-scroll py-2"
               style={{ maxHeight: '500px' }}
             >
               {(() => {
@@ -4314,11 +4373,7 @@ export function LauncherWindow() {
                       <div className="px-4 py-3 mb-2 border-b border-gray-200">
                         <div 
                           ref={horizontalScrollContainerRef}
-                          className="flex gap-3 overflow-x-auto pb-2 executable-scroll-container"
-                          style={{ 
-                            scrollbarWidth: 'none', // Firefox
-                            msOverflowStyle: 'none', // IE/Edge
-                          }}
+                          className="flex gap-3 pb-2 executable-scroll-container"
                         >
                           {horizontalResults.map((result, execIndex) => {
                             const isSelected = selectedHorizontalIndex === execIndex;
