@@ -1388,15 +1388,15 @@ export function LauncherWindow() {
       lowerQuery.includes(keyword.toLowerCase()) || keyword.toLowerCase().includes(lowerQuery)
     );
     
-    // 检查是否是启动相关关键词（这些应该优先显示系统启动文件夹，而不是软件设置）
-    const startupKeywords = ["开机启动", "自启动", "启动项", "startup", "autostart"];
-    const isStartupQuery = startupKeywords.some(keyword => 
+    // 检查是否应该显示"设置"结果（只在明确搜索相关关键词时显示）
+    const settingsKeywords = ["设置", "settings", "配置", "config", "preferences"];
+    const shouldShowSettings = settingsKeywords.some(keyword => 
       lowerQuery.includes(keyword.toLowerCase()) || keyword.toLowerCase().includes(lowerQuery)
     );
     
-    // 检查是否应该显示"设置"结果（排除启动相关关键词）
-    const settingsKeywords = ["设置", "settings", "配置", "config"];
-    const shouldShowSettings = !isStartupQuery && settingsKeywords.some(keyword => 
+    // 检查是否是启动相关关键词（这些应该优先显示系统启动文件夹，而不是软件设置）
+    const startupKeywords = ["开机启动", "自启动", "启动项", "startup", "autostart"];
+    const isStartupQuery = startupKeywords.some(keyword => 
       lowerQuery.includes(keyword.toLowerCase()) || keyword.toLowerCase().includes(lowerQuery)
     );
     
@@ -1414,12 +1414,6 @@ export function LauncherWindow() {
         displayName: "历史访问",
         path: "history://shortcuts-config",
       }] : []),
-      // 如果查询匹配设置关键词，添加设置结果（但不包括启动相关关键词）
-      ...(shouldShowSettings ? [{
-        type: "settings" as const,
-        displayName: "设置",
-        path: "settings://window",
-      }] : []),
       // 绝对路径直达结果（如果存在）
       ...(directPathResult ? [{
         type: "file" as const,
@@ -1434,6 +1428,7 @@ export function LauncherWindow() {
         displayName: "系统启动设置",
         path: "ms-settings:startupapps",
       }] : []),
+      // 如果查询匹配设置关键词，优先显示 Windows 设置应用（通过提高其优先级实现）
       ...filteredApps.map((app) => ({
         type: "app" as const,
         app,
@@ -1711,6 +1706,24 @@ export function LauncherWindow() {
         if (aIsPlugin && !bIsPlugin && !bIsSpecial) return -1;
         if (!aIsPlugin && bIsPlugin && !aIsSpecial) return 1;
 
+        // Windows 设置应用优先级处理（当搜索设置相关关键词时）
+        const aAppName = (a.app?.name || a.displayName || '').toLowerCase();
+        const aAppPath = (a.path || '').toLowerCase();
+        const aIsSettingsApp = (a.type === "app" && ((aAppName === '设置' || aAppName === 'settings') || 
+                         aAppPath.startsWith('shell:appsfolder') || 
+                         aAppPath.startsWith('ms-settings:')));
+        const bAppName = (b.app?.name || b.displayName || '').toLowerCase();
+        const bAppPath = (b.path || '').toLowerCase();
+        const bIsSettingsApp = (b.type === "app" && ((bAppName === '设置' || bAppName === 'settings') || 
+                         bAppPath.startsWith('shell:appsfolder') || 
+                         bAppPath.startsWith('ms-settings:')));
+        
+        // 如果查询匹配设置关键词，Windows 设置应用优先级最高（仅次于特殊类型和插件）
+        if (shouldShowSettings) {
+          if (aIsSettingsApp && !bIsSettingsApp && !bIsSpecial && !bIsPlugin) return -1;
+          if (!aIsSettingsApp && bIsSettingsApp && !aIsSpecial && !aIsPlugin) return 1;
+        }
+
         // 获取使用频率和最近使用时间
         const aUseCount = a.file?.use_count;
         const aLastUsed = a.file?.last_used || openHistory[a.path] || 0;
@@ -1756,6 +1769,14 @@ export function LauncherWindow() {
 
         // 按评分降序排序（分数高的在前）
         if (bScore !== aScore) {
+          // 如果查询匹配设置关键词，Windows 设置应用优先（即使分数稍低）
+          if (shouldShowSettings) {
+            const scoreDiff = Math.abs(bScore - aScore);
+            if (scoreDiff <= 500) { // 允许更大的分数差距
+              if (aIsSettingsApp && !bIsSettingsApp && !bIsSpecial && !bIsPlugin) return -1;
+              if (!aIsSettingsApp && bIsSettingsApp && !aIsSpecial && !aIsPlugin) return 1;
+            }
+          }
           // 如果评分差距在200分以内，且一个是历史文件，另一个是 Everything 结果，优先历史文件
           const scoreDiff = Math.abs(bScore - aScore);
           if (scoreDiff <= 200) {
@@ -1765,7 +1786,11 @@ export function LauncherWindow() {
           return bScore - aScore;
         }
 
-        // 如果评分相同，优先顺序：应用 > 历史文件 > Everything > 其他，然后按最近使用时间排序
+        // 如果评分相同，优先顺序：Windows 设置应用 > 应用 > 历史文件 > Everything > 其他，然后按最近使用时间排序
+        if (shouldShowSettings) {
+          if (aIsSettingsApp && !bIsSettingsApp && !bIsSpecial && !bIsPlugin) return -1;
+          if (!aIsSettingsApp && bIsSettingsApp && !aIsSpecial && !aIsPlugin) return 1;
+        }
         if (a.type === "app" && b.type !== "app") return -1;
         if (a.type !== "app" && b.type === "app") return 1;
         if (a.type === "file" && b.type === "everything") return -1; // 历史文件优先于 Everything
@@ -1804,16 +1829,69 @@ export function LauncherWindow() {
     const executableResults = allResults.filter(result => {
       if (result.type === "app") {
         const pathLower = result.path.toLowerCase();
-        return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
+        // 包含可执行文件、快捷方式，以及 UWP 应用 URI（shell:AppsFolder 和 ms-settings:）
+        return pathLower.endsWith('.exe') || 
+               pathLower.endsWith('.lnk') ||
+               pathLower.startsWith('shell:appsfolder') ||
+               pathLower.startsWith('ms-settings:');
       }
       return false;
     });
     
+    
     // 对应用结果按规范化路径去重（统一路径分隔符）
+    // 对于"设置"应用，需要特殊处理：即使路径不同，也只保留一个
     const normalizedPathMap = new Map<string, SearchResult>();
+    let hasSettingsApp = false;
     
     for (const result of executableResults) {
       if (result.type === "app") {
+        const currentName = (result.app?.name || result.displayName || '').toLowerCase();
+        const currentPath = result.path.toLowerCase();
+        // 只对名称完全匹配"设置"/"Settings"或路径是 Windows 系统设置的应用进行特殊处理
+        const isSettingsApp = (currentName === '设置' || currentName === 'settings') || 
+                             currentPath.startsWith('shell:appsfolder') || 
+                             currentPath.startsWith('ms-settings:');
+        
+        // 对于"设置"应用，只保留第一个（优先 shell:AppsFolder，其次 ms-settings:）
+        if (isSettingsApp) {
+          if (!hasSettingsApp) {
+            // 第一个"设置"应用，直接添加
+            const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+            normalizedPathMap.set(normalizedPath, result);
+            hasSettingsApp = true;
+          } else {
+            // 已经有"设置"应用了，检查当前这个是否更好
+            const existingSettings = Array.from(normalizedPathMap.values()).find(r => {
+              const name = (r.app?.name || r.displayName || '').toLowerCase();
+              const path = r.path.toLowerCase();
+              return (name === '设置' || name === 'settings') || 
+                     path.startsWith('shell:appsfolder') || 
+                     path.startsWith('ms-settings:');
+            });
+            
+            if (existingSettings) {
+              const existingPath = existingSettings.path.toLowerCase();
+              const currentPath = result.path.toLowerCase();
+              
+              // 优先保留 shell:AppsFolder，其次 ms-settings:
+              const currentIsShell = currentPath.startsWith('shell:appsfolder');
+              const existingIsMsSettings = existingPath.startsWith('ms-settings:');
+              
+              // 如果当前是 shell:AppsFolder 而已有的是 ms-settings:，替换
+              if (currentIsShell && existingIsMsSettings) {
+                const existingNormalizedPath = existingSettings.path.toLowerCase().replace(/\\/g, "/");
+                normalizedPathMap.delete(existingNormalizedPath);
+                const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+                normalizedPathMap.set(normalizedPath, result);
+              }
+              // 否则跳过（已有更好的版本）
+            }
+          }
+          continue; // 跳过后续的普通去重逻辑
+        }
+        
+        // 普通应用的去重逻辑
         // 规范化路径：统一使用正斜杠，转小写
         const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
         
@@ -1823,7 +1901,6 @@ export function LauncherWindow() {
         } else {
           // 路径已存在，比较并保留更好的版本
           const existing = normalizedPathMap.get(normalizedPath)!;
-          const currentName = result.app?.name || result.displayName;
           const existingName = existing.app?.name || existing.displayName;
           
           // 优先保留名称不包含 .lnk 后缀的（更简洁）
@@ -1844,6 +1921,7 @@ export function LauncherWindow() {
     }
     
     const deduplicatedExecutableResults = Array.from(normalizedPathMap.values());
+    
     const pluginResults = allResults.filter(result => result.type === "plugin");
     const horizontal = [...deduplicatedExecutableResults, ...pluginResults];
     
@@ -1851,7 +1929,11 @@ export function LauncherWindow() {
       // Not an executable app and not a plugin
       if (result.type === "app") {
         const pathLower = result.path.toLowerCase();
-        return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+        // 排除可执行文件、快捷方式，以及 UWP 应用 URI（这些应该在横向列表中）
+        return !pathLower.endsWith('.exe') && 
+               !pathLower.endsWith('.lnk') &&
+               !pathLower.startsWith('shell:appsfolder') &&
+               !pathLower.startsWith('ms-settings:');
       }
       return result.type !== "plugin";
     });

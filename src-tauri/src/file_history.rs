@@ -496,6 +496,22 @@ pub fn launch_file(path: &str) -> Result<(), String> {
             return Ok(());
         }
         
+        // Special handling for ms-settings: URI (Windows 10/11 Settings app)
+        if trimmed.starts_with("ms-settings:") {
+            use std::process::Command;
+            use std::os::windows::process::CommandExt;
+            
+            eprintln!("[DEBUG] launch_file: executing ms-settings URI: {}", trimmed);
+            
+            Command::new("cmd")
+                .args(&["/c", "start", "", trimmed])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW - 不显示控制台窗口
+                .spawn()
+                .map_err(|e| format!("Failed to open Windows Settings: {}", e))?;
+            
+            return Ok(());
+        }
+        
         // Check if this is a CLSID path (virtual folder like Recycle Bin)
         // CLSID paths start with "::"
         let is_clsid_path = trimmed.starts_with("::");

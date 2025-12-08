@@ -472,28 +472,31 @@ pub async fn scan_applications(app: tauri::AppHandle) -> Result<Vec<app_search::
         let cache = APP_CACHE.clone();
         let mut cache_guard = cache.lock().map_err(|e| e.to_string())?;
 
-        // Return cached apps if available
-        if let Some(ref apps) = *cache_guard {
-            return Ok(apps.clone());
-        }
-
-        // Try to load from disk cache first
-        let app_data_dir = get_app_data_dir(&app_clone)?;
-        if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
-            if !disk_cache.is_empty() {
-                *cache_guard = Some(disk_cache.clone());
-                // Return cached apps immediately, no background scan
-                return Ok(disk_cache);
+        let mut apps = if let Some(ref cached_apps) = *cache_guard {
+            // Return cached apps if available
+            cached_apps.clone()
+        } else {
+            // Try to load from disk cache first
+            let app_data_dir = get_app_data_dir(&app_clone)?;
+            if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+                if !disk_cache.is_empty() {
+                    disk_cache
+                } else {
+                    // Scan applications (potentially slow) on background thread
+                    app_search::windows::scan_start_menu(None)?
+                }
+            } else {
+                // Scan applications (potentially slow) on background thread
+                app_search::windows::scan_start_menu(None)?
             }
-        }
+        };
 
-        // Scan applications (potentially slow) on background thread
-        let apps = app_search::windows::scan_start_menu(None)?;
 
-        // Cache the results
+        // Update cache with apps including builtin apps
         *cache_guard = Some(apps.clone());
 
-        // Save to disk cache
+        // Save to disk cache (including builtin apps)
+        let app_data_dir = get_app_data_dir(&app_clone)?;
         let _ = app_search::windows::save_cache(&app_data_dir, &apps);
 
         // No background icon extraction - icons will be extracted on-demand during search
@@ -744,17 +747,24 @@ pub async fn populate_app_icons(
             }
 
             let path = Path::new(&app_info.path);
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase());
-
-            let icon = if ext == Some("lnk".to_string()) {
-                app_search::windows::extract_lnk_icon_base64(path)
-            } else if ext == Some("exe".to_string()) {
-                app_search::windows::extract_icon_base64(path)
+            let path_str = app_info.path.to_lowercase();
+            
+            let icon = if path_str.starts_with("shell:appsfolder\\") {
+                // UWP app - extract icon using special method
+                app_search::windows::extract_uwp_app_icon_base64(&app_info.path)
             } else {
-                None
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase());
+                
+                if ext == Some("lnk".to_string()) {
+                    app_search::windows::extract_lnk_icon_base64(path)
+                } else if ext == Some("exe".to_string()) {
+                    app_search::windows::extract_icon_base64(path)
+                } else {
+                    None
+                }
             };
 
             if let Some(icon_data) = icon {

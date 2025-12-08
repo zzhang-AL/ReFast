@@ -105,14 +105,9 @@ pub mod windows {
                     let _ = tx.send((10 + (idx as u8 * 15), format!("正在扫描: {}", path_name)));
                 }
                 // Start scanning from depth 0, limit to 3 levels for better coverage
-                if let Err(e) = scan_directory(&start_menu_path, &mut apps, 0) {
-                    eprintln!("[DEBUG] Error scanning {:?}: {}", start_menu_path, e);
+                if let Err(_e) = scan_directory(&start_menu_path, &mut apps, 0) {
                     // Continue on error
-                } else {
-                    eprintln!("[DEBUG] Scanned {:?}, found {} apps so far", start_menu_path, apps.len());
                 }
-            } else {
-                eprintln!("[DEBUG] Path does not exist: {:?}", start_menu_path);
             }
         }
 
@@ -122,14 +117,9 @@ pub mod windows {
         }
         for desktop_path in desktop_paths.into_iter().flatten() {
             if desktop_path.exists() {
-                if let Err(e) = scan_directory(&desktop_path, &mut apps, 0) {
-                    eprintln!("[DEBUG] Error scanning desktop {:?}: {}", desktop_path, e);
+                if let Err(_e) = scan_directory(&desktop_path, &mut apps, 0) {
                     // Continue on error
-                } else {
-                    eprintln!("[DEBUG] Scanned desktop {:?}, found {} apps so far", desktop_path, apps.len());
                 }
-            } else {
-                eprintln!("[DEBUG] Desktop path does not exist: {:?}", desktop_path);
             }
         }
 
@@ -137,30 +127,44 @@ pub mod windows {
         if let Some(ref tx) = tx {
             let _ = tx.send((70, "正在扫描 Microsoft Store 应用...".to_string()));
         }
-        match scan_uwp_apps() {
-            Ok(mut uwp_apps) => {
-                let before = apps.len();
-                apps.append(&mut uwp_apps);
-                eprintln!(
-                    "[DEBUG] Added {} UWP apps from Get-StartApps, total so far {}",
-                    apps.len().saturating_sub(before),
-                    apps.len()
-                );
-            }
-            Err(e) => {
-                eprintln!("[DEBUG] Failed to scan UWP apps: {}", e);
-            }
+        if let Ok(mut uwp_apps) = scan_uwp_apps() {
+            apps.append(&mut uwp_apps);
         }
-
-        eprintln!("[DEBUG] Total apps found before dedup: {}", apps.len());
 
         if let Some(ref tx) = tx {
             let _ = tx.send((80, format!("找到 {} 个应用，正在去重...", apps.len())));
         }
 
         // Remove duplicates based on path (more accurate than name)
-        apps.sort_by(|a, b| a.path.cmp(&b.path));
-        apps.dedup_by(|a, b| a.path == b.path);
+        // But keep ms-settings: URI as fallback if shell:AppsFolder exists
+        apps.sort_by(|a, b| {
+            // Sort by path, but prioritize shell:AppsFolder over ms-settings:
+            let a_is_ms_settings = a.path.starts_with("ms-settings:");
+            let b_is_ms_settings = b.path.starts_with("ms-settings:");
+            if a_is_ms_settings && !b_is_ms_settings {
+                std::cmp::Ordering::Greater
+            } else if !a_is_ms_settings && b_is_ms_settings {
+                std::cmp::Ordering::Less
+            } else {
+                a.path.cmp(&b.path)
+            }
+        });
+        apps.dedup_by(|a, b| {
+            // Remove duplicates by path
+            if a.path == b.path {
+                return true;
+            }
+            // If both are Settings apps (same name), keep shell:AppsFolder and remove ms-settings:
+            if a.name == "设置" && b.name == "设置" {
+                if a.path.starts_with("shell:AppsFolder") && b.path.starts_with("ms-settings:") {
+                    return true; // Remove ms-settings: if shell:AppsFolder exists
+                }
+                if b.path.starts_with("shell:AppsFolder") && a.path.starts_with("ms-settings:") {
+                    return true; // Remove ms-settings: if shell:AppsFolder exists
+                }
+            }
+            false
+        });
 
         // If still duplicates by name, keep the one with better launch target
         // Prefer real executables/shortcuts (with icons) over shell:AppsFolder URIs
@@ -190,26 +194,81 @@ pub mod windows {
 
             a.path.len().cmp(&b.path.len())
         });
-        apps.dedup_by(|a, b| a.name == b.name);
-
-        eprintln!("[DEBUG] Total apps after dedup: {}", apps.len());
+        
+        // Deduplicate by name, but be careful with Settings app
+        // Keep at least one Settings app (prefer shell:AppsFolder, then ms-settings:)
+        let mut deduplicated = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut settings_apps: Vec<AppInfo> = Vec::new();
+        
+        for app in apps {
+            let name_lower = app.name.to_lowercase();
+            
+            // Special handling for Settings app - collect all variants
+            // Match both Chinese "设置" and English "Settings"
+            if name_lower == "设置" || name_lower == "settings" || 
+               name_lower.contains("设置") || name_lower.contains("settings") {
+                settings_apps.push(app);
+            } else {
+                // For other apps, normal deduplication
+                if !seen_names.contains(&name_lower) {
+                    seen_names.insert(name_lower.clone());
+                    deduplicated.push(app);
+                }
+            }
+        }
+        
+        // Add Settings app(s) - prefer shell:AppsFolder, then ms-settings:
+        // IMPORTANT: Always add at least one Settings app (from builtin if UWP scan didn't find it)
+        if !settings_apps.is_empty() {
+            // Sort settings apps by priority
+            settings_apps.sort_by(|a, b| {
+                let a_priority = if a.path.starts_with("shell:AppsFolder") { 0 } 
+                    else if a.path.starts_with("ms-settings:") { 1 } 
+                    else { 2 };
+                let b_priority = if b.path.starts_with("shell:AppsFolder") { 0 } 
+                    else if b.path.starts_with("ms-settings:") { 1 } 
+                    else { 2 };
+                a_priority.cmp(&b_priority)
+            });
+            
+            // Add the first (best) Settings app
+            let selected_settings = settings_apps[0].clone();
+            deduplicated.push(selected_settings);
+        } else {
+            // UWP scan didn't find Settings, add builtin one
+            let builtin_settings = AppInfo {
+                name: "设置".to_string(),
+                path: "ms-settings:".to_string(),
+                icon: None,
+                description: Some("Windows 系统设置".to_string()),
+                name_pinyin: Some("shezhi".to_string()),
+                name_pinyin_initials: Some("sz".to_string()),
+            };
+            deduplicated.push(builtin_settings);
+        }
+        seen_names.insert("设置".to_string());
+        seen_names.insert("settings".to_string());
+        
+        apps = deduplicated;
         
         if let Some(ref tx) = tx {
             let _ = tx.send((95, format!("去重完成，共 {} 个应用", apps.len())));
         }
         
-        // Debug: Check if Cursor is in the list
-        if let Some(cursor_app) = apps.iter().find(|a| a.name.to_lowercase().contains("cursor")) {
-            eprintln!("[DEBUG] Found Cursor: name={}, path={}", cursor_app.name, cursor_app.path);
-        } else {
-            eprintln!("[DEBUG] Cursor not found in scanned apps");
-        }
 
         if let Some(ref tx) = tx {
             let _ = tx.send((100, "扫描完成".to_string()));
         }
 
         Ok(apps)
+    }
+
+    /// 获取内置系统应用列表（确保关键系统应用始终可用）
+    /// 这些应用会在 UWP 扫描之前添加，如果 UWP 扫描找到了同名应用，会在去重时保留 UWP 版本
+    pub fn get_builtin_system_apps() -> Vec<AppInfo> {
+        // 内置系统应用列表（当前为空，可根据需要添加）
+        Vec::new()
     }
 
     #[derive(Deserialize)]
@@ -409,6 +468,109 @@ pub mod windows {
         Ok(())
     }
 
+    // Extract icon from UWP app (shell:AppsFolder path)
+    // Uses Shell32 COM object to directly extract icon from shell:AppsFolder path
+    pub fn extract_uwp_app_icon_base64(app_path: &str) -> Option<String> {
+        // Parse shell:AppsFolder\PackageFamilyName!ApplicationId format
+        if !app_path.starts_with("shell:AppsFolder\\") {
+            return None;
+        }
+        
+        // Encode the full path for PowerShell parameter
+        let path_utf16: Vec<u16> = app_path.encode_utf16().collect();
+        let path_base64 = base64::engine::general_purpose::STANDARD.encode(
+            path_utf16
+                .iter()
+                .flat_map(|&u| u.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        );
+        
+        // Use PowerShell with Shell32 COM object to extract icon directly from shell:AppsFolder
+        let ps_script = r#"
+param([string]$PathBase64)
+
+try {
+    # Decode UTF-16 path from base64
+    $bytes = [Convert]::FromBase64String($PathBase64)
+    $appPath = [System.Text.Encoding]::Unicode.GetString($bytes)
+    
+    # Use Shell32 to get UWP app icon directly from shell:AppsFolder
+    $shell = New-Object -ComObject Shell.Application
+    $appsFolder = $shell.NameSpace("shell:AppsFolder")
+    
+    if ($appsFolder -eq $null) {
+        exit 1
+    }
+    
+    # Find the app by path
+    $appItem = $null
+    foreach ($item in $appsFolder.Items()) {
+        if ($item.Path -eq $appPath) {
+            $appItem = $item
+            break
+        }
+    }
+    
+    if ($appItem -eq $null) {
+        exit 1
+    }
+    
+    # Extract icon using Shell32
+    $iconPath = $appItem.ExtractIcon(0)
+    if ($iconPath -eq $null) {
+        exit 1
+    }
+    
+    # Convert icon to PNG using GDI+
+    Add-Type -AssemblyName System.Drawing
+    $icon = [System.Drawing.Icon]::FromHandle($iconPath.Handle)
+    $bitmap = $icon.ToBitmap()
+    $ms = New-Object System.IO.MemoryStream
+    $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bytes = $ms.ToArray()
+    $ms.Close()
+    $icon.Dispose()
+    $bitmap.Dispose()
+    
+    [Convert]::ToBase64String($bytes)
+} catch {
+    exit 1
+}
+"#;
+        
+        // Write script to temp file to avoid command-line length limits
+        let temp_script =
+            std::env::temp_dir().join(format!("uwp_icon_extract_{}.ps1", std::process::id()));
+        std::fs::write(&temp_script, ps_script).ok()?;
+        
+        let output = std::process::Command::new("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+            .args(&[
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                temp_script.to_str()?,
+                "-PathBase64",
+                &path_base64,
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .ok()?;
+        
+        // Clean up temp script
+        let _ = std::fs::remove_file(&temp_script);
+        
+        if output.status.success() {
+            let base64_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !base64_str.is_empty() && base64_str.len() > 100 {
+                return Some(format!("data:image/png;base64,{}", base64_str));
+            }
+        }
+        None
+    }
+    
     // Extract icon from file and convert to base64 PNG
     // Uses PowerShell with parameter passing to avoid encoding issues
     pub fn extract_icon_base64(file_path: &Path) -> Option<String> {
@@ -496,17 +658,6 @@ try {
             if !base64.is_empty() && base64.len() > 100 {
                 return Some(format!("data:image/png;base64,{}", base64));
             }
-        } else {
-            // Log error details for debugging
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            eprintln!(
-                "[图标提取失败] .exe 文件: {:?}, 退出码: {:?}, stderr: {}, stdout: {}",
-                file_path,
-                output.status.code(),
-                stderr,
-                stdout
-            );
         }
         None
     }
@@ -525,7 +676,6 @@ try {
         unsafe {
             let hr = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED as u32);
             if hr < 0 {
-                eprintln!("[Native API] COM 初始化失败: {}", hr);
                 return None;
             }
         }
@@ -535,11 +685,11 @@ try {
             let (icon_source_path, icon_index) = match get_lnk_icon_location(lnk_path) {
                 Some(result) => result,
                 None => {
-                    eprintln!("[图标提取] 无法获取 IconLocation: {:?}", lnk_path);                    return None;
+                    return None;
                 }
             };
 
-            eprintln!("[图标提取] 尝试从路径提取图标: {:?}, 索引: {}", icon_source_path, icon_index);            // 使用 ExtractIconExW 从目标文件提取图标
+            // 使用 ExtractIconExW 从目标文件提取图标
             let icon_source_wide: Vec<u16> = OsStr::new(&icon_source_path)
                 .encode_wide()
                 .chain(Some(0))
@@ -553,21 +703,18 @@ try {
                     1,
                 );
 
-                eprintln!("[图标提取] ExtractIconExW 返回: count={}, handle={:?}", count, large_icons[0]);                if count > 0 && large_icons[0] != 0 {
+                if count > 0 && large_icons[0] != 0 {
                     if let Some(png_data) = icon_to_png(large_icons[0]) {
                         // 清理图标句柄
                         DestroyIcon(large_icons[0]);
-                        eprintln!("[图标提取] 成功提取图标: {:?}", icon_source_path);                        return Some(format!("data:image/png;base64,{}", png_data));
-                    } else {
-                        eprintln!("[图标提取] icon_to_png 失败: {:?}", icon_source_path);                    }
+                        return Some(format!("data:image/png;base64,{}", png_data));
+                    }
                     // 清理图标句柄
                     DestroyIcon(large_icons[0]);
-                } else {
-                    eprintln!("[图标提取] ExtractIconExW 失败: count={}, handle={:?}", count, large_icons[0]);                }
+                }
 
                 // 如果指定索引失败，尝试索引 0
                 if icon_index != 0 {
-                    eprintln!("[图标提取] 尝试使用索引 0: {:?}", icon_source_path);
                     let mut large_icons: [isize; 1] = [0; 1];
                     let count = ExtractIconExW(
                         icon_source_wide.as_ptr(),
@@ -577,22 +724,17 @@ try {
                         1,
                     );
 
-                    eprintln!("[图标提取] ExtractIconExW (索引 0) 返回: count={}, handle={:?}", count, large_icons[0]);
-
                     if count > 0 && large_icons[0] != 0 {
                         if let Some(png_data) = icon_to_png(large_icons[0]) {
                             DestroyIcon(large_icons[0]);
-                            eprintln!("[图标提取] 成功提取图标 (索引 0): {:?}", icon_source_path);
                             return Some(format!("data:image/png;base64,{}", png_data));
-                        } else {
-                            eprintln!("[图标提取] icon_to_png 失败 (索引 0): {:?}", icon_source_path);
                         }
                         DestroyIcon(large_icons[0]);
                     }
                 }
             }
 
-            eprintln!("[图标提取] 所有方法都失败: {:?}", icon_source_path);            None
+            None
         })();
 
         // 清理 COM
@@ -1293,17 +1435,6 @@ public class IconExtractor {
             if !base64.is_empty() && base64.len() > 100 {
                 return Some(format!("data:image/png;base64,{}", base64));
             }
-        } else {
-            // Log error details for debugging
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            eprintln!(
-                "[图标提取失败] .lnk 文件: {:?}, 退出码: {:?}, stderr: {}, stdout: {}",
-                lnk_path,
-                output.status.code(),
-                stderr,
-                stdout
-            );
         }
         None
     }
@@ -1541,25 +1672,76 @@ public class IconExtractor {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
 
         let path_str = app.path.trim();
-        let path = Path::new(path_str);
-        let is_shell_uri = path_str.to_lowercase().starts_with("shell:appsfolder");
+        let path_lower = path_str.to_lowercase();
+        
+        // Special handling for ms-settings: URI (Windows Settings app)
+        if path_lower.starts_with("ms-settings:") {
+            use std::process::Command;
+            use std::os::windows::process::CommandExt;
+            
+            Command::new("cmd")
+                .args(&["/c", "start", "", path_str])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW - 不显示控制台窗口
+                .spawn()
+                .map_err(|e| format!("Failed to open Windows Settings: {}", e))?;
+            
+            return Ok(());
+        }
+        
+        // Special handling for shell:AppsFolder URIs - use ShellExecuteExW or fallback to ms-settings:
+        if path_lower.starts_with("shell:appsfolder") {
+            // Try ShellExecuteW first
+            let path_wide: Vec<u16> = OsStr::new(path_str)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
 
-        // For shell:AppsFolder URIs, skip filesystem existence checks
-        if !is_shell_uri {
-            let is_lnk = path.extension().and_then(|s| s.to_str()) == Some("lnk");
-            if !is_lnk && !path.exists() {
-                return Err(format!("Application not found: {}", app.path));
+            let result = unsafe {
+                ShellExecuteW(
+                    0, // hwnd - no parent window
+                    std::ptr::null(), // lpOperation - NULL means "open"
+                    path_wide.as_ptr(), // lpFile
+                    std::ptr::null(), // lpParameters
+                    std::ptr::null(), // lpDirectory
+                    1, // nShowCmd - SW_SHOWNORMAL (1)
+                )
+            };
+            
+            // If ShellExecuteW fails, try fallback to ms-settings: for Windows Settings
+            if result as i32 <= 32 {
+                if path_str.contains("Microsoft.Windows.Settings") {
+                    
+                    use std::process::Command;
+                    use std::os::windows::process::CommandExt;
+                    
+                    Command::new("cmd")
+                        .args(&["/c", "start", "", "ms-settings:"])
+                        .creation_flags(0x08000000) // CREATE_NO_WINDOW - 不显示控制台窗口
+                        .spawn()
+                        .map_err(|e| format!("Failed to open Windows Settings (fallback): {}", e))?;
+                    
+                    return Ok(());
+                } else {
+                    return Err(format!("Failed to launch application: {} (error code: {})", app.path, result as i32));
+                }
             }
+            
+            return Ok(());
+        }
+        
+        let path = Path::new(path_str);
+        let is_lnk = path.extension().and_then(|s| s.to_str()) == Some("lnk");
+        if !is_lnk && !path.exists() {
+            return Err(format!("Application not found: {}", app.path));
         }
 
-        // Convert path (or shell URI) to wide string (UTF-16) for Windows API
+        // Convert path to wide string (UTF-16) for Windows API
         let path_wide: Vec<u16> = OsStr::new(path_str)
             .encode_wide()
             .chain(Some(0))
             .collect();
 
         // Use ShellExecuteW to open application without showing command prompt
-        // This works for .exe, .lnk, shell:AppsFolder URIs, and other executable types
         let result = unsafe {
             ShellExecuteW(
                 0, // hwnd - no parent window

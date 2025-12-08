@@ -136,7 +136,7 @@ pub mod windows {
                 // 回收站使用 CLSID 路径
                 get_recycle_bin_path()
             } else if *name_cn == "控制面板" {
-                // 控制面板使用 CLSID 路径
+                // 控制面板使用 control 命令
                 get_control_panel_path()
             } else {
                 get_special_folder_path(*csidl)

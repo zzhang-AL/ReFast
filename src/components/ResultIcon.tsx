@@ -58,6 +58,38 @@ export function ResultIcon({
 
   // 处理应用图标
   if (result.type === "app") {
+    // 检查是否是 Windows 设置应用，如果是则使用齿轮图标
+    const appName = (result.app?.name || result.displayName || '').toLowerCase();
+    const appPath = (result.path || '').toLowerCase();
+    const isSettingsApp = (appName === '设置' || appName === 'settings') || 
+                         appPath.startsWith('shell:appsfolder') || 
+                         appPath.startsWith('ms-settings:');
+    
+    if (isSettingsApp) {
+      // Windows 设置应用使用齿轮图标
+      const className = size === "horizontal"
+        ? `${isSelected ? "w-9 h-9" : "w-7 h-7"} ${isSelected 
+            ? (resultStyle === "soft" ? "text-blue-600" : resultStyle === "skeuomorphic" ? "text-[#4a6fa5]" : "text-indigo-600")
+            : (resultStyle === "skeuomorphic" ? "text-gray-700" : "text-gray-600")}`
+        : `${iconSize} ${theme.iconColor(isSelected, "text-gray-600")}`;
+      return (
+        <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+          />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+          />
+        </svg>
+      );
+    }
+    
     let iconToUse = result.app?.icon;
     if (!iconToUse && result.path) {
       const matchedApp = apps.find((app) => app.path === result.path);
@@ -183,8 +215,13 @@ export function ResultIcon({
 
   // 处理设置图标
   if (result.type === "settings") {
+    const className = size === "horizontal"
+      ? `${isSelected ? "w-9 h-9" : "w-7 h-7"} ${isSelected 
+          ? (resultStyle === "soft" ? "text-white" : resultStyle === "skeuomorphic" ? "text-white" : "text-indigo-600")
+          : (resultStyle === "skeuomorphic" ? "text-gray-700" : "text-gray-600")}`
+      : `${iconSize} ${theme.iconColor(isSelected, "text-gray-600")}`;
     return (
-      <svg className={`w-5 h-5 ${theme.iconColor(isSelected, "text-gray-600")}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
