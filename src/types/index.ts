@@ -161,6 +161,7 @@ export interface MemoItem {
 // 插件系统类型定义
 export interface PluginContext {
   // 可以传递给插件执行函数的上下文信息
+  query?: string; // 当前搜索查询内容
   setQuery: (query: string) => void;
   setSelectedIndex: (index: number) => void;
   hideLauncher: () => Promise<void>;

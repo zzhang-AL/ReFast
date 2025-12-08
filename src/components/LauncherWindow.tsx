@@ -516,6 +516,7 @@ export function LauncherWindow() {
         
         try {
           const pluginContext: PluginContext = {
+            query,
             setQuery,
             setSelectedIndex,
             hideLauncher: async () => {
@@ -3370,6 +3371,7 @@ export function LauncherWindow() {
       } else if (result.type === "plugin" && result.plugin) {
         // 使用插件系统执行插件
         const pluginContext: PluginContext = {
+          query,
           setQuery,
           setSelectedIndex,
           hideLauncher: async () => {
@@ -4690,6 +4692,7 @@ export function LauncherWindow() {
               <AppCenterContent
                 onPluginClick={async (pluginId: string) => {
                   const pluginContext: PluginContext = {
+                    query,
                     setQuery,
                     setSelectedIndex,
                     hideLauncher: async () => {

@@ -2,6 +2,7 @@ import type { Plugin, PluginContext } from "../types";
 import type { LoadedPlugin, PluginManifest } from "./types";
 import { PluginLoader } from "./loader";
 import { tauriApi } from "../api/tauri";
+import { isMathExpression } from "../utils/launcherUtils";
 
 // 内置插件定义（从旧的 index.ts 迁移）
 import { createBuiltinPlugins } from "./builtin";
@@ -170,6 +171,21 @@ export class PluginRegistry {
         plugin.description?.toLowerCase().includes(lower) ||
         plugin.keywords.some((keyword) => keyword.toLowerCase().includes(lower))
     );
+    
+    // 如果输入是数学表达式，自动添加计算稿纸插件
+    if (isMathExpression(query)) {
+      const calculatorPadPlugin = this.getPluginById("calculator_pad");
+      if (calculatorPadPlugin) {
+        // 检查是否已经在结果中，避免重复
+        const alreadyInResults = results.some(p => p.id === "calculator_pad");
+        if (!alreadyInResults) {
+          // 将计算稿纸插件添加到结果的最前面
+          results.unshift(calculatorPadPlugin);
+          console.log(`[Plugin Search] Detected math expression, added calculator_pad plugin`);
+        }
+      }
+    }
+    
     console.log(`[Plugin Search] Query: "${query}", Total plugins: ${allPlugins.length}, Results: ${results.length}`);
     return results;
   }

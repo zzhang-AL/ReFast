@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { create, all } from "mathjs";
 
 interface CalculationLine {
@@ -90,6 +91,59 @@ export function CalculatorPadWindow() {
   ]);
   const [_focusedLineId, setFocusedLineId] = useState<string>("1");
   const inputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+
+  // 监听来自启动器的表达式设置事件
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupListener = async () => {
+      try {
+        unlisten = await listen<string>("calculator-pad:set-expression", (event) => {
+          const expression = event.payload;
+          if (expression && expression.trim()) {
+            // 将表达式设置到第一行
+            setLines((prevLines) => {
+              const newLines = [...prevLines];
+              if (newLines.length > 0) {
+                newLines[0] = {
+                  ...newLines[0],
+                  expression: expression.trim(),
+                };
+              } else {
+                newLines.push({
+                  id: "1",
+                  expression: expression.trim(),
+                  result: null,
+                  error: null,
+                });
+              }
+              return newLines;
+            });
+            
+            // 聚焦到第一行输入框
+            setTimeout(() => {
+              const firstInput = inputRefs.current.get("1");
+              if (firstInput) {
+                firstInput.focus();
+                // 将光标移到末尾
+                firstInput.setSelectionRange(firstInput.value.length, firstInput.value.length);
+              }
+            }, 100);
+          }
+        });
+      } catch (error) {
+        console.error("Failed to setup calculator pad event listener:", error);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   // 计算所有行的结果
   // 使用 useMemo 来跟踪表达式变化，避免无限循环

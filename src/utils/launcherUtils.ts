@@ -103,6 +103,48 @@ export function isLnkPath(path: string | undefined | null): boolean {
   return path?.toLowerCase().endsWith(".lnk") ?? false;
 }
 
+// 检测输入是否为数学表达式
+export function isMathExpression(text: string): boolean {
+  if (!text || text.trim().length === 0) return false;
+  
+  const trimmed = text.trim();
+  
+  // 如果太短（少于2个字符），不太可能是数学表达式
+  if (trimmed.length < 2) return false;
+  
+  // 移除所有空格
+  const withoutSpaces = trimmed.replace(/\s+/g, "");
+  
+  // 检查是否包含数学运算符
+  const hasOperator = /[+\-*/%=^]/.test(withoutSpaces);
+  if (!hasOperator) return false;
+  
+  // 检查是否包含数字
+  const hasNumber = /\d/.test(withoutSpaces);
+  if (!hasNumber) return false;
+  
+  // 检查是否主要是数学相关字符（数字、运算符、括号、小数点、空格）
+  // 允许的字符：数字、运算符、括号、小数点、空格、科学计数法（e/E）
+  const mathPattern = /^[0-9+\-*/%()^.\s]+$/i;
+  const isMathChars = mathPattern.test(withoutSpaces);
+  
+  // 如果包含太多字母（超过2个），不太可能是纯数学表达式
+  const letterCount = (withoutSpaces.match(/[a-zA-Z]/g) || []).length;
+  if (letterCount > 2) return false;
+  
+  // 如果主要是数学字符，且包含运算符和数字，则认为是数学表达式
+  if (isMathChars && hasOperator && hasNumber) {
+    return true;
+  }
+  
+  // 特殊情况：包含科学计数法（如 1e5, 2E-3）
+  if (/^\d+\.?\d*[eE][+\-]?\d+$/.test(withoutSpaces)) {
+    return true;
+  }
+  
+  return false;
+}
+
 // 相关性评分函数
 export function calculateRelevanceScore(
   displayName: string,
