@@ -319,6 +319,14 @@ export function EverythingSearchWindow() {
     setSessionError(null);
   }, []);
 
+  const scrollToTop = useCallback(() => {
+    setScrollTop(0);
+    const node = listContainerRef.current;
+    if (node) {
+      node.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, []);
+
   const closeSessionSafe = useCallback(
     async (id?: string | null) => {
       const target = id ?? sessionId;
@@ -373,6 +381,7 @@ export function EverythingSearchWindow() {
       // 关闭旧会话
       await closeSessionSafe();
       resetCaches();
+      scrollToTop();
       setIsSearching(true);
       setSessionMode(!!(startSessionFn && getRangeFn));
       setSessionError(null);
