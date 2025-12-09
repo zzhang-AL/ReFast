@@ -588,13 +588,6 @@ export function EverythingSearchWindow() {
     };
   }, [query, startSearchSession]);
 
-  // 过滤、排序、匹配模式变化时重新搜索（复用会话 API）
-  useEffect(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    startSearchSession(trimmed);
-  }, [activeFilter, matchWholeWord, matchFolderNameOnly, sortKey, sortOrder, startSearchSession, query]);
-
   // 选中项变化时触发预览
   useEffect(() => {
     const target = getItemByIndex(selectedIndex);
