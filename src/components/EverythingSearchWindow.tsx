@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tauriApi } from "../api/tauri";
 import type { EverythingResult, FilePreview } from "../types";
@@ -112,6 +113,7 @@ export function EverythingSearchWindow() {
   const pageOrderRef = useRef<number[]>([]);
   const pendingSessionIdRef = useRef<string | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const batchAccumRef = useRef<EverythingResult[]>([]);
 
   const activeFilter = useMemo<FilterItem | undefined>(() => {
     const builtIn = QUICK_FILTERS.find((f) => f.id === activeFilterId);
@@ -315,6 +317,7 @@ export function EverythingSearchWindow() {
     pageCacheRef.current.clear();
     pageOrderRef.current = [];
     inflightPagesRef.current.clear();
+    batchAccumRef.current = [];
     setCacheVersion((v) => v + 1);
     setSessionError(null);
   }, []);
@@ -389,6 +392,9 @@ export function EverythingSearchWindow() {
       // 若后端尚未升级，回退老的批次接口
       if (!startSessionFn || !getRangeFn) {
         try {
+          // 清空批次累积，等待事件逐步填充
+          batchAccumRef.current = [];
+
           const response = await tauriApi.searchEverything(trimmed, {
             extensions: extFilter,
             maxResults: maxResultsToUse,
@@ -398,7 +404,7 @@ export function EverythingSearchWindow() {
           const limited = response.results.slice(0, Math.min(maxResultsToUse, SAFE_DISPLAY_LIMIT));
           const fallbackTotal = Math.min(response.total_count ?? limited.length, limited.length);
 
-          // 将结果按 PAGE_SIZE 切片缓存，避免滚动到后续页出现“加载中”
+          // 最终结果回填一次，确保列表完整
           pageCacheRef.current.clear();
           pageOrderRef.current = [];
           const pageCount = Math.ceil(limited.length / PAGE_SIZE);
@@ -760,6 +766,49 @@ export function EverythingSearchWindow() {
     };
   }, [closeSessionSafe]);
 
+  // 监听后端批次事件（仅用于 legacy searchEverything 路径的实时进度）
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const setup = async () => {
+      unlisten = await listen<{
+        results: EverythingResult[];
+        total_count: number;
+        current_count: number;
+      }>("everything-search-batch", (event) => {
+        // 会话模式时不处理（session API 不依赖事件）
+        if (sessionMode) return;
+
+        const { results, total_count } = event.payload;
+        if (!Array.isArray(results) || results.length === 0) return;
+
+        // 追加到累积，再切片进缓存
+        batchAccumRef.current = [
+          ...batchAccumRef.current,
+          ...results.slice(0, Math.min(SAFE_DISPLAY_LIMIT, results.length)),
+        ].slice(0, SAFE_DISPLAY_LIMIT);
+
+        const limited = batchAccumRef.current;
+        pageCacheRef.current.clear();
+        pageOrderRef.current = [];
+        const pageCount = Math.ceil(limited.length / PAGE_SIZE);
+        for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+          const start = pageIndex * PAGE_SIZE;
+          const slice = limited.slice(start, start + PAGE_SIZE);
+          pageCacheRef.current.set(pageIndex, slice);
+          pageOrderRef.current.push(pageIndex);
+        }
+
+        setTotalCount(Math.min(total_count ?? limited.length, SAFE_DISPLAY_LIMIT));
+        setCacheVersion((v) => v + 1);
+        setIsSearching(true);
+      });
+    };
+    setup();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [sessionMode]);
+
   const displayCount = useMemo(() => {
     if (!totalCount) return 0;
     const maxDisplayable = Math.min(maxResults || ABS_MAX_RESULTS, SAFE_DISPLAY_LIMIT);
@@ -793,6 +842,11 @@ export function EverythingSearchWindow() {
     });
     return Math.min(count, SAFE_DISPLAY_LIMIT);
   }, [cacheVersion]);
+
+  const isIndeterminateProgress = useMemo(
+    () => isSearching && computedLoadedCount === 0,
+    [computedLoadedCount, isSearching]
+  );
 
   // 键盘导航
   useEffect(() => {
@@ -882,17 +936,25 @@ export function EverythingSearchWindow() {
               <div className="flex items-center gap-2">
                 <span className="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                 <span>
-                  {totalCount ? `搜索中... ${computedLoadedCount}/${totalCount}` : "搜索中..."}
+                  {isIndeterminateProgress
+                    ? "搜索中... 正在获取首批结果"
+                    : totalCount
+                    ? `搜索中... ${computedLoadedCount}/${totalCount}`
+                    : "搜索中..."}
                 </span>
               </div>
               <div className="w-full bg-gray-200 h-1 rounded">
                 <div
-                  className="h-1 bg-blue-500 rounded transition-all"
+                  className={`h-1 bg-blue-500 rounded transition-all ${
+                    isIndeterminateProgress ? "animate-pulse" : ""
+                  }`}
                   style={{
-                    width: `${Math.min(
-                      100,
-                      totalCount ? (computedLoadedCount / Math.max(totalCount, 1)) * 100 : 20
-                    )}%`,
+                    width: isIndeterminateProgress
+                      ? "35%"
+                      : `${Math.min(
+                          100,
+                          totalCount ? (computedLoadedCount / Math.max(totalCount, 1)) * 100 : 20
+                        )}%`,
                   }}
                 />
               </div>

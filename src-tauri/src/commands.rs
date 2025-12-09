@@ -1248,6 +1248,8 @@ pub struct EverythingSearchOptions {
     pub match_whole_word: Option<bool>,
     #[serde(rename = "matchFolderNameOnly")]
     pub match_folder_name_only: Option<bool>,
+    #[serde(rename = "chunkSize")]
+    pub chunk_size: Option<usize>,
 }
 
 fn build_everything_query(base: &str, options: &Option<EverythingSearchOptions>) -> (String, usize) {
@@ -1391,6 +1393,11 @@ pub async fn search_everything(
     #[cfg(target_os = "windows")]
     {
         let (combined_query, max_results) = build_everything_query(&query, &options);
+        let chunk_size = options
+            .as_ref()
+            .and_then(|opts| opts.chunk_size)
+            .unwrap_or(500)
+            .max(1);
 
         // 为新搜索准备取消标志，同时通知旧搜索退出
         let cancel_flag = {
@@ -1449,14 +1456,12 @@ pub async fn search_everything(
             new_flag
         };
 
-        // 获取窗口用于发送事件
-        let window = app
-            .get_webview_window("launcher")
-            .ok_or_else(|| "无法获取 launcher 窗口".to_string())?;
+        // 获取窗口用于发送事件（向 launcher 与 everything-search-window 都尝试发送）
+        let launcher_window = app.get_webview_window("launcher");
+        let everything_window = app.get_webview_window("everything-search-window");
 
         // 在后台线程执行搜索，避免阻塞
         let query_clone = combined_query.clone();
-        let window_clone = window.clone();
         let max_results_clone = max_results;
 
         // 获取异步运行时句柄，用于在阻塞线程中发送事件
@@ -1464,22 +1469,31 @@ pub async fn search_everything(
         
         tokio::task::spawn_blocking(move || {
             // 创建批次回调，用于实时发送结果（仅用于进度显示）
-            let on_batch = |batch_results: &[everything_search::EverythingResult], total_count: u32, current_count: u32| {
+            let on_batch = move |batch_results: &[everything_search::EverythingResult], total_count: u32, current_count: u32| {
                 // 在异步运行时中发送事件
-                let window = window_clone.clone();
+                let launcher = launcher_window.clone();
+                let everything_win = everything_window.clone();
                 let batch_results = batch_results.to_vec();
                 let handle = rt_handle.clone();
                 
                 // 使用运行时句柄在阻塞线程中发送异步事件
                 handle.spawn(async move {
-                    // 发送增量结果事件
                     let event_data = serde_json::json!({
                         "results": batch_results,
                         "total_count": total_count,
                         "current_count": current_count,
                     });
-                    if let Err(e) = window.emit("everything-search-batch", &event_data) {
-                        eprintln!("[DEBUG] Failed to emit search batch event: {}", e);
+
+                    if let Some(win) = launcher {
+                        if let Err(e) = win.emit("everything-search-batch", &event_data) {
+                            eprintln!("[DEBUG] Failed to emit search batch event to launcher: {}", e);
+                        }
+                    }
+
+                    if let Some(win) = everything_win {
+                        if let Err(e) = win.emit("everything-search-batch", &event_data) {
+                            eprintln!("[DEBUG] Failed to emit search batch event to search window: {}", e);
+                        }
                     }
                 });
             };
@@ -1491,6 +1505,7 @@ pub async fn search_everything(
             let result = everything_search::windows::search_files(
                 &query_clone,
                 max_results_clone,
+                chunk_size,
                 Some(&cancel_flag),
                 Some(on_batch),
                 match_whole_word,
