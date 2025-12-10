@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { tauriApi } from "../api/tauri";
 import type { EverythingResult, FilePreview } from "../types";
 
-type SortKey = "modified" | "size" | "type" | "name";
+type SortKey = "size" | "type" | "name";
 type SortOrder = "asc" | "desc";
 
 type FilterItem = {
@@ -20,7 +20,6 @@ const SORT_PREFERENCE_KEY = "everything_sort_pref";
 const FILTER_PREFERENCE_KEY = "everything_filter_pref";
 const CUSTOM_FILTER_PREFERENCE_KEY = "everything_custom_filters";
 const MAX_RESULTS_PREFERENCE_KEY = "everything_max_results_pref";
-const MATCH_WHOLE_WORD_PREFERENCE_KEY = "everything_match_whole_word";
 const MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY = "everything_match_folder_name_only";
 const DEFAULT_MAX_RESULTS = 5000; // 会作为软性展示上限，后端仍可返回更多供分页
 const ABS_MAX_RESULTS = 2000000; // 单次会话展示硬上限，防止无限渲染
@@ -86,7 +85,7 @@ export function EverythingSearchWindow() {
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingError, setEverythingError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [sortKey, setSortKey] = useState<SortKey>("modified");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [activeFilterId, setActiveFilterId] = useState<string>("all");
   const [customFilters, setCustomFilters] = useState<CustomFilter[]>([]);
@@ -94,7 +93,6 @@ export function EverythingSearchWindow() {
   const [newFilterExts, setNewFilterExts] = useState("");
   const [previewData, setPreviewData] = useState<FilePreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [matchWholeWord, setMatchWholeWord] = useState(false);
   const [matchFolderNameOnly, setMatchFolderNameOnly] = useState(false);
   const [maxResults, setMaxResults] = useState<number>(DEFAULT_MAX_RESULTS);
   const [showSyntaxHelp, setShowSyntaxHelp] = useState(false);
@@ -124,7 +122,6 @@ export function EverythingSearchWindow() {
     maxResults: number;
     sortKey: SortKey;
     sortOrder: SortOrder;
-    matchWholeWord: boolean;
     matchFolderNameOnly: boolean;
   } | null>(null);
 
@@ -203,11 +200,6 @@ export function EverythingSearchWindow() {
           }
         }
 
-        const savedMatchWholeWord = localStorage.getItem(MATCH_WHOLE_WORD_PREFERENCE_KEY);
-        if (savedMatchWholeWord !== null) {
-          setMatchWholeWord(savedMatchWholeWord === "true");
-        }
-
         const savedMatchFolderNameOnly = localStorage.getItem(MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY);
         if (savedMatchFolderNameOnly !== null) {
           setMatchFolderNameOnly(savedMatchFolderNameOnly === "true");
@@ -260,14 +252,6 @@ export function EverythingSearchWindow() {
 
     return () => clearTimeout(timer);
   }, [customFilters]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(MATCH_WHOLE_WORD_PREFERENCE_KEY, matchWholeWord.toString());
-    } catch {
-      // ignore
-    }
-  }, [matchWholeWord]);
 
   useEffect(() => {
     try {
@@ -404,7 +388,6 @@ export function EverythingSearchWindow() {
         maxResults: maxResultsToUse,
         sortKey,
         sortOrder,
-        matchWholeWord,
         matchFolderNameOnly,
       };
       
@@ -418,7 +401,6 @@ export function EverythingSearchWindow() {
         activeSessionParamsRef.current.maxResults === currentParams.maxResults &&
         activeSessionParamsRef.current.sortKey === currentParams.sortKey &&
         activeSessionParamsRef.current.sortOrder === currentParams.sortOrder &&
-        activeSessionParamsRef.current.matchWholeWord === currentParams.matchWholeWord &&
         activeSessionParamsRef.current.matchFolderNameOnly === currentParams.matchFolderNameOnly
       ) {
         console.log("相同参数已有活跃会话，等待完成", { 
@@ -464,7 +446,6 @@ export function EverythingSearchWindow() {
             maxResults: maxResultsToUse,
             sortKey,
             sortOrder,
-            matchWholeWord,
             matchFolderNameOnly,
           }),
           sessionTimeoutPromise,
@@ -518,7 +499,6 @@ export function EverythingSearchWindow() {
             extensions: extFilter,
             sortKey,
             sortOrder,
-            matchWholeWord,
             matchFolderNameOnly,
           }),
           timeoutPromise,
@@ -617,7 +597,6 @@ export function EverythingSearchWindow() {
       getRangeFn,
       isEverythingAvailable,
       matchFolderNameOnly,
-      matchWholeWord,
       maxResults,
       resetCaches,
       shouldIgnoreCancelError,
@@ -671,7 +650,6 @@ export function EverythingSearchWindow() {
           extensions: extFilter,
           sortKey,
           sortOrder,
-          matchWholeWord,
           matchFolderNameOnly,
         });
         
@@ -711,7 +689,6 @@ export function EverythingSearchWindow() {
       activeFilter,
       getRangeFn,
       matchFolderNameOnly,
-      matchWholeWord,
       pruneLRU,
       sessionId,
       sessionMode,
@@ -764,13 +741,12 @@ export function EverythingSearchWindow() {
     };
   }, [query]); // 只依赖 query，不依赖 startSearchSession，避免函数重新创建时重复触发
 
-  // 当过滤器、排序、全字匹配等参数变化时，如果有查询，重新触发搜索
+  // 当过滤器、排序等参数变化时，如果有查询，重新触发搜索
   // 使用 useRef 保存上一次的参数值，避免 query 变化时重复触发
   const prevParamsRef = useRef<{
     activeFilterId: string;
     sortKey: SortKey;
     sortOrder: SortOrder;
-    matchWholeWord: boolean;
     matchFolderNameOnly: boolean;
     maxResults: number;
     query: string;
@@ -782,7 +758,6 @@ export function EverythingSearchWindow() {
       activeFilterId,
       sortKey,
       sortOrder,
-      matchWholeWord,
       matchFolderNameOnly,
       maxResults,
       query: trimmed,
@@ -811,7 +786,6 @@ export function EverythingSearchWindow() {
       prevParamsRef.current.activeFilterId !== currentParams.activeFilterId ||
       prevParamsRef.current.sortKey !== currentParams.sortKey ||
       prevParamsRef.current.sortOrder !== currentParams.sortOrder ||
-      prevParamsRef.current.matchWholeWord !== currentParams.matchWholeWord ||
       prevParamsRef.current.matchFolderNameOnly !== currentParams.matchFolderNameOnly ||
       prevParamsRef.current.maxResults !== currentParams.maxResults;
 
@@ -832,7 +806,7 @@ export function EverythingSearchWindow() {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [activeFilterId, sortKey, sortOrder, matchWholeWord, matchFolderNameOnly, maxResults, query]); // 监听所有影响搜索结果的参数
+  }, [activeFilterId, sortKey, sortOrder, matchFolderNameOnly, maxResults, query]); // 监听所有影响搜索结果的参数
 
   // 选中项变化时触发预览
   useEffect(() => {
@@ -1165,15 +1139,6 @@ export function EverythingSearchWindow() {
             <label className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg border border-gray-200 whitespace-nowrap">
               <input
                 type="checkbox"
-                checked={matchWholeWord}
-                onChange={(e) => setMatchWholeWord(e.target.checked)}
-                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-              />
-              <span>全字匹配</span>
-            </label>
-            <label className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg border border-gray-200 whitespace-nowrap">
-              <input
-                type="checkbox"
                 checked={matchFolderNameOnly}
                 onChange={(e) => setMatchFolderNameOnly(e.target.checked)}
                 className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
@@ -1311,7 +1276,6 @@ export function EverythingSearchWindow() {
 
         <div className="flex flex-wrap items-center gap-2">
           {[
-            { key: "modified" as SortKey, label: "时间" },
             { key: "size" as SortKey, label: "大小" },
             { key: "type" as SortKey, label: "类型" },
             { key: "name" as SortKey, label: "名称" },
@@ -1418,8 +1382,10 @@ export function EverythingSearchWindow() {
                   key={item ? item.path : `placeholder-${index}`}
                   onClick={() => setSelectedIndex(index)}
                   onDoubleClick={() => item && handleLaunch(item)}
-                  className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                    isSelected ? "bg-blue-50" : ""
+                  className={`p-3 border-b border-gray-100 cursor-pointer ${
+                    isSelected 
+                      ? "bg-blue-50 hover:bg-blue-100" 
+                      : "bg-white hover:bg-gray-50"
                   }`}
                   style={{ minHeight: ITEM_HEIGHT }}
                 >

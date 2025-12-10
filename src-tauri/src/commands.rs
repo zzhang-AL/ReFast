@@ -1265,8 +1265,6 @@ pub struct EverythingSearchOptions {
     pub only_folders: Option<bool>,
     #[serde(rename = "maxResults")]
     pub max_results: Option<usize>,
-    #[serde(rename = "matchWholeWord")]
-    pub match_whole_word: Option<bool>,
     #[serde(rename = "matchFolderNameOnly")]
     pub match_folder_name_only: Option<bool>,
     #[serde(rename = "chunkSize")]
@@ -1306,38 +1304,10 @@ fn build_everything_query(base: &str, options: &Option<EverythingSearchOptions>)
         // 如果启用"仅匹配文件夹名"，需要特殊处理
         // 但如果用户已经使用了 Everything 语法，则跳过特殊处理，直接使用用户输入的查询
         let match_folder_name_only = opts.match_folder_name_only.unwrap_or(false);
-        let match_whole_word = opts.match_whole_word.unwrap_or(false);
         
         if match_folder_name_only && !base_query.is_empty() && !has_everything_syntax {
-            // 只匹配文件夹名，使用正则表达式
-            // 转义特殊字符
-            let escaped_query = base_query
-                .replace('\\', "\\\\")
-                .replace('.', "\\.")
-                .replace('^', "\\^")
-                .replace('$', "\\$")
-                .replace('|', "\\|")
-                .replace('(', "\\(")
-                .replace(')', "\\)")
-                .replace('[', "\\[")
-                .replace(']', "\\]")
-                .replace('{', "\\{")
-                .replace('}', "\\}")
-                .replace('+', "\\+")
-                .replace('*', "\\*")
-                .replace('?', "\\?");
-            
-            // 构建正则表达式：匹配文件夹名
-            // Windows 路径使用反斜杠，Unix 路径使用正斜杠
-            if match_whole_word {
-                // 全字匹配：使用单词边界，匹配路径末尾的文件夹名（作为完整单词）
-                base_query = format!("regex:.*[\\\\/]\\b{}\\b$|^\\b{}\\b$", escaped_query, escaped_query);
-            } else {
-                // 普通匹配：匹配路径末尾的文件夹名（包含匹配，支持部分匹配）
-                // 例如搜索 "mal" 可以匹配 "mall" 文件夹
-                base_query = format!("regex:.*[\\\\/].*{}.*$|^.*{}.*$", escaped_query, escaped_query);
-            }
-            use_regex = true;
+            // 只匹配文件夹名，使用简单的 folder: 语法
+            // Everything 会自动匹配文件夹名
             // 强制只搜索文件夹
             parts.push("folder:".to_string());
         } else {
@@ -1539,17 +1509,12 @@ pub async fn search_everything(
                 });
             };
 
-            let match_whole_word = options.as_ref()
-                .and_then(|opts| opts.match_whole_word)
-                .unwrap_or(false);
-
             let result = everything_search::windows::search_files(
                 &query_clone,
                 max_results_clone,
                 chunk_size,
                 Some(&cancel_flag),
                 Some(on_batch),
-                match_whole_word,
             );
 
             // 无论搜索成功还是失败，都要清理 current_query
@@ -1614,11 +1579,9 @@ pub struct EverythingSearchSessionOptions {
     #[serde(rename = "maxResults")]
     pub max_results: Option<usize>,
     #[serde(rename = "sortKey")]
-    pub sort_key: Option<String>, // "modified" | "size" | "type" | "name"
+    pub sort_key: Option<String>, // "size" | "type" | "name"
     #[serde(rename = "sortOrder")]
     pub sort_order: Option<String>, // "asc" | "desc"
-    #[serde(rename = "matchWholeWord")]
-    pub match_whole_word: Option<bool>,
     #[serde(rename = "matchFolderNameOnly")]
     pub match_folder_name_only: Option<bool>,
 }
@@ -1658,9 +1621,6 @@ pub async fn start_everything_search_session(
             .and_then(|o| o.max_results)
             .unwrap_or(5000)
             .min(2000000); // 硬上限
-        let match_whole_word = opts
-            .and_then(|o| o.match_whole_word)
-            .unwrap_or(false);
         let match_folder_name_only = opts
             .and_then(|o| o.match_folder_name_only)
             .unwrap_or(false);
@@ -1672,7 +1632,6 @@ pub async fn start_everything_search_session(
             only_files: None,
             only_folders: if match_folder_name_only { Some(true) } else { None },
             max_results: Some(max_results),
-            match_whole_word: Some(match_whole_word),
             match_folder_name_only: Some(match_folder_name_only),
             chunk_size: Some(5000),
         };
@@ -1721,7 +1680,6 @@ pub async fn start_everything_search_session(
                     5000,
                     Some(&cancel_flag),
                     Some(on_batch),
-                    match_whole_word,
                 )
             })
             .await
@@ -1741,34 +1699,6 @@ pub async fn start_everything_search_session(
             let ascending = sort_order_str == "asc";
 
             match sort_key.as_str() {
-                "modified" => {
-                    results.sort_by(|a, b| {
-                        // 尝试解析日期字符串，支持多种格式
-                        let parse_date = |s: &str| -> Option<i64> {
-                            // 尝试 RFC3339 格式
-                            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-                                return Some(dt.timestamp());
-                            }
-                            // 尝试其他常见格式
-                            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-                                return Some(dt.and_utc().timestamp());
-                            }
-                            None
-                        };
-                        
-                        let a_ts = a.date_modified.as_ref()
-                            .and_then(|s| parse_date(s))
-                            .unwrap_or(0);
-                        let b_ts = b.date_modified.as_ref()
-                            .and_then(|s| parse_date(s))
-                            .unwrap_or(0);
-                        if ascending {
-                            a_ts.cmp(&b_ts)
-                        } else {
-                            b_ts.cmp(&a_ts)
-                        }
-                    });
-                }
                 "size" => {
                     results.sort_by(|a, b| {
                         let a_size = a.size.unwrap_or(0);
@@ -2967,6 +2897,20 @@ pub fn reveal_in_folder(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        // Check if the path is in the Recycle Bin
+        let path_str_lower = trimmed.to_lowercase();
+        let is_recycle_bin = path_str_lower.contains("$recycle.bin");
+        
+        if is_recycle_bin {
+            // For Recycle Bin files, open the Recycle Bin folder directly
+            // Use shell:RecycleBinFolder to open the Recycle Bin
+            Command::new("explorer")
+                .arg("shell:RecycleBinFolder")
+                .spawn()
+                .map_err(|e| format!("Failed to open Recycle Bin: {}", e))?;
+            return Ok(());
+        }
+
         // Get parent directory from the path string itself (more reliable)
         // This works even if the file doesn't exist
         let parent_dir = if absolute_path.exists() {

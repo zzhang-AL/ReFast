@@ -1154,14 +1154,12 @@ pub mod windows {
     /// * `max_results` - 最大结果数量
     /// * `cancelled` - 可选的取消标志，如果设置为 true，搜索将提前终止
     /// * `on_batch` - 可选的批次回调函数，每获取一批结果时调用
-    /// * `match_whole_word` - 是否启用全字匹配
     pub fn search_files<F>(
         query: &str,
         max_results: usize,
         chunk_size: usize,
         cancelled: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
         mut on_batch: Option<F>,
-        match_whole_word: bool,
     ) -> Result<EverythingSearchResponse, EverythingError>
     where
         F: FnMut(&[EverythingResult], u32, u32), // (batch_results, total_count, current_count)
@@ -1212,14 +1210,7 @@ pub mod windows {
         }
 
         // 构建搜索标志
-        // 注意：如果使用了正则表达式（regex:），则不需要设置全字匹配标志
-        // 因为正则表达式本身已经实现了精确匹配
         let mut search_flags = 0u32;
-        // 只有当不使用正则表达式时才设置全字匹配标志
-        // 正则表达式模式由 build_everything_query 函数处理
-        if match_whole_word && !query.trim_start().starts_with("regex:") {
-            search_flags |= EVERYTHING_IPC_MATCHWHOLEWORD;
-        }
         // 如果使用正则表达式，需要设置正则表达式标志
         if query.trim_start().starts_with("regex:") {
             search_flags |= EVERYTHING_IPC_REGEX;
