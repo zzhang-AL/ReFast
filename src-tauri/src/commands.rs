@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use tauri::{async_runtime, Emitter, Manager};
 
 static RECORDING_STATE: LazyLock<Arc<Mutex<RecordingState>>> =
@@ -45,6 +47,25 @@ static SEARCH_TASK_MANAGER: LazyLock<Arc<Mutex<SearchTaskManager>>> = LazyLock::
     Arc::new(Mutex::new(SearchTaskManager { 
         cancel_flag: None,
         current_query: None,
+    }))
+});
+
+// 会话管理器：存储 Everything 搜索会话的结果
+#[derive(Debug, Clone)]
+struct SearchSession {
+    query: String,
+    results: Vec<everything_search::EverythingResult>,
+    total_count: u32,
+    created_at: std::time::Instant,
+}
+
+struct SearchSessionManager {
+    sessions: std::collections::HashMap<String, SearchSession>,
+}
+
+static SEARCH_SESSION_MANAGER: LazyLock<Arc<Mutex<SearchSessionManager>>> = LazyLock::new(|| {
+    Arc::new(Mutex::new(SearchSessionManager {
+        sessions: std::collections::HashMap::new(),
     }))
 });
 
@@ -1379,6 +1400,13 @@ fn build_everything_query(base: &str, options: &Option<EverythingSearchOptions>)
             }
         }
     }
+    // 当没有传递 options（如启动器中的简化调用）时，也应保留用户输入的基础查询，
+    // 否则会导致 combined_query 为空，后端直接返回 0 结果
+    else {
+        if !base_query.is_empty() {
+            parts.push(base_query.clone());
+        }
+    }
 
     let combined_query = parts.join(" ").trim().to_string();
     (combined_query, max_results)
@@ -1396,8 +1424,21 @@ pub async fn search_everything(
         let chunk_size = options
             .as_ref()
             .and_then(|opts| opts.chunk_size)
-            .unwrap_or(500)
+            .unwrap_or(5000)
             .max(1);
+
+        // 前置兜底：若最终查询字符串为空，直接返回空结果，避免前端误触发“查询字符串不能为空”错误
+        // 典型场景：仅设置过滤器但未输入关键词，或异步竞态导致空串落到后端
+        if combined_query.trim().is_empty() {
+            eprintln!(
+                "[RUST] search_everything: combined query is empty, return empty result (raw='{}')",
+                query
+            );
+            return Ok(everything_search::EverythingSearchResponse {
+                results: vec![],
+                total_count: 0,
+            });
+        }
 
         // 为新搜索准备取消标志，同时通知旧搜索退出
         let cancel_flag = {
@@ -1565,6 +1606,255 @@ pub fn cancel_everything_search() -> Result<(), String> {
     {
         Err("Everything search is only available on Windows".to_string())
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EverythingSearchSessionOptions {
+    pub extensions: Option<Vec<String>>,
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<usize>,
+    #[serde(rename = "sortKey")]
+    pub sort_key: Option<String>, // "modified" | "size" | "type" | "name"
+    #[serde(rename = "sortOrder")]
+    pub sort_order: Option<String>, // "asc" | "desc"
+    #[serde(rename = "matchWholeWord")]
+    pub match_whole_word: Option<bool>,
+    #[serde(rename = "matchFolderNameOnly")]
+    pub match_folder_name_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EverythingSearchSessionResponse {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    #[serde(rename = "totalCount")]
+    pub total_count: u32,
+    pub truncated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EverythingSearchRangeResponse {
+    pub offset: usize,
+    pub items: Vec<everything_search::EverythingResult>,
+    #[serde(rename = "totalCount")]
+    pub total_count: Option<u32>,
+}
+
+/// 开启 Everything 搜索会话
+#[tauri::command]
+pub async fn start_everything_search_session(
+    search_query: String,
+    options: Option<EverythingSearchSessionOptions>,
+    _app: tauri::AppHandle,
+) -> Result<EverythingSearchSessionResponse, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::time::SystemTime;
+        
+        // 构建查询参数
+        let opts = options.as_ref();
+        let ext_filter = opts.and_then(|o| o.extensions.as_ref());
+        let max_results = opts
+            .and_then(|o| o.max_results)
+            .unwrap_or(5000)
+            .min(2000000); // 硬上限
+        let match_whole_word = opts
+            .and_then(|o| o.match_whole_word)
+            .unwrap_or(false);
+        let match_folder_name_only = opts
+            .and_then(|o| o.match_folder_name_only)
+            .unwrap_or(false);
+
+        // 构建查询字符串（复用现有逻辑）
+        let search_opts = EverythingSearchOptions {
+            extensions: ext_filter.cloned(),
+            exclude_extensions: None,
+            only_files: None,
+            only_folders: if match_folder_name_only { Some(true) } else { None },
+            max_results: Some(max_results),
+            match_whole_word: Some(match_whole_word),
+            match_folder_name_only: Some(match_folder_name_only),
+            chunk_size: Some(5000),
+        };
+        
+        let (combined_query, _) = build_everything_query(&search_query, &Some(search_opts));
+        
+        // 在移动之前克隆 combined_query，用于后续生成会话 ID
+        let combined_query_for_session = combined_query.clone();
+
+        // 执行搜索
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let result = {
+            tokio::task::spawn_blocking(move || {
+                everything_search::windows::search_files(
+                    &combined_query,
+                    max_results,
+                    5000,
+                    Some(&cancel_flag),
+                    None::<fn(&[everything_search::EverythingResult], u32, u32)>, // 不需要批次回调
+                    match_whole_word,
+                )
+            })
+            .await
+            .map_err(|e| format!("搜索任务失败: {}", e))?
+        };
+
+        let search_response = result.map_err(|e| e.to_string())?;
+
+        // 对结果进行排序（如果需要）
+        let mut results = search_response.results;
+        if let Some(sort_key) = opts.and_then(|o| o.sort_key.as_ref()) {
+            // 使用字符串字面量而不是临时值
+            let default_sort_order = "desc";
+            let sort_order_str = opts
+                .and_then(|o| o.sort_order.as_deref())
+                .unwrap_or(default_sort_order);
+            let ascending = sort_order_str == "asc";
+
+            match sort_key.as_str() {
+                "modified" => {
+                    results.sort_by(|a, b| {
+                        // 尝试解析日期字符串，支持多种格式
+                        let parse_date = |s: &str| -> Option<i64> {
+                            // 尝试 RFC3339 格式
+                            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                                return Some(dt.timestamp());
+                            }
+                            // 尝试其他常见格式
+                            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                return Some(dt.and_utc().timestamp());
+                            }
+                            None
+                        };
+                        
+                        let a_ts = a.date_modified.as_ref()
+                            .and_then(|s| parse_date(s))
+                            .unwrap_or(0);
+                        let b_ts = b.date_modified.as_ref()
+                            .and_then(|s| parse_date(s))
+                            .unwrap_or(0);
+                        if ascending {
+                            a_ts.cmp(&b_ts)
+                        } else {
+                            b_ts.cmp(&a_ts)
+                        }
+                    });
+                }
+                "size" => {
+                    results.sort_by(|a, b| {
+                        let a_size = a.size.unwrap_or(0);
+                        let b_size = b.size.unwrap_or(0);
+                        if ascending {
+                            a_size.cmp(&b_size)
+                        } else {
+                            b_size.cmp(&a_size)
+                        }
+                    });
+                }
+                "type" => {
+                    results.sort_by(|a, b| {
+                        let a_ext = std::path::Path::new(&a.path)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        let b_ext = std::path::Path::new(&b.path)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        if ascending {
+                            a_ext.cmp(b_ext)
+                        } else {
+                            b_ext.cmp(a_ext)
+                        }
+                    });
+                }
+                "name" => {
+                    results.sort_by(|a, b| {
+                        if ascending {
+                            a.name.cmp(&b.name)
+                        } else {
+                            b.name.cmp(&a.name)
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        // 生成会话 ID（使用时间戳 + 随机数）
+        let mut hasher = DefaultHasher::new();
+        SystemTime::now().hash(&mut hasher);
+        combined_query_for_session.hash(&mut hasher);
+        let session_id = format!("session_{}", hasher.finish());
+
+        // 在移动 results 之前保存长度
+        let results_len = results.len();
+        let truncated = results_len >= max_results;
+
+        // 存储会话
+        let session = SearchSession {
+            query: combined_query_for_session,
+            results,
+            total_count: search_response.total_count,
+            created_at: std::time::Instant::now(),
+        };
+
+        {
+            let mut manager = SEARCH_SESSION_MANAGER
+                .lock()
+                .map_err(|e| format!("锁定会话管理器失败: {}", e))?;
+            manager.sessions.insert(session_id.clone(), session);
+        }
+
+        Ok(EverythingSearchSessionResponse {
+            session_id,
+            total_count: search_response.total_count,
+            truncated: Some(truncated),
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Everything search is only available on Windows".to_string())
+    }
+}
+
+/// 获取搜索会话的指定范围结果
+#[tauri::command]
+pub fn get_everything_search_range(
+    session_id: String,
+    offset: usize,
+    limit: usize,
+    _options: Option<EverythingSearchSessionOptions>, // 保留参数以兼容前端，但排序已在创建会话时完成
+) -> Result<EverythingSearchRangeResponse, String> {
+    let manager = SEARCH_SESSION_MANAGER
+        .lock()
+        .map_err(|e| format!("锁定会话管理器失败: {}", e))?;
+
+    let session = manager
+        .sessions
+        .get(&session_id)
+        .ok_or_else(|| "会话不存在或已过期".to_string())?;
+
+    let total_count = session.results.len();
+    let end = (offset + limit).min(total_count);
+    let items = session.results[offset..end].to_vec();
+
+    Ok(EverythingSearchRangeResponse {
+        offset,
+        items,
+        total_count: Some(session.total_count),
+    })
+}
+
+/// 关闭搜索会话
+#[tauri::command]
+pub fn close_everything_search_session(session_id: String) -> Result<(), String> {
+    let mut manager = SEARCH_SESSION_MANAGER
+        .lock()
+        .map_err(|e| format!("锁定会话管理器失败: {}", e))?;
+
+    manager.sessions.remove(&session_id);
+    Ok(())
 }
 
 #[tauri::command]
