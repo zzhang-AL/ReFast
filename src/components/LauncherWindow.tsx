@@ -626,7 +626,8 @@ export function LauncherWindow() {
       // 监听插件快捷键更新事件
       unsubscribeUpdated = await listen<Record<string, { modifiers: string[]; key: string }>>(
         "plugin-hotkeys-updated",
-        (event) => {
+        () => {
+          // 插件快捷键更新事件处理（当前为空）
         }
       );
     };
@@ -1638,7 +1639,6 @@ export function LauncherWindow() {
     // 对结果进行去重：如果同一个路径出现在多个结果源中，只保留一个
     // 优先保留历史文件结果（因为历史记录包含使用频率和最近使用时间，排序更准确）
     // 先收集历史文件结果的路径集合
-    const originalResultsCount = otherResults.length; // 保存原始结果数量
     const historyFilePaths = new Set<string>();
     for (const result of otherResults) {
       if (result.type === "file") {
@@ -3252,7 +3252,12 @@ export function LauncherWindow() {
         }
       } else {
         // Query 已改变，清空结果
-        console.warn("[最终结果][second-check] ✗ 第二次检查失败，清空结果", secondCheckState);
+        console.warn("[最终结果][second-check] ✗ 第二次检查失败，清空结果", {
+          currentQuery: query.trim(),
+          searchQuery: searchQuery.trim(),
+          cancelled: currentSearchRef.current?.cancelled,
+          refQuery: currentSearchRef.current?.query
+        });
         setEverythingResults([]);
         setEverythingTotalCount(null);
         setEverythingCurrentCount(0);
