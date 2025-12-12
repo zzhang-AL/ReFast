@@ -1,10 +1,13 @@
 {
   "id": "everything_search",
-  "name": "Everything 文件搜索",
+  "name": "文件搜索（索引）",
   "version": "1.0.0",
-  "description": "使用 Everything 进行快速文件搜索",
+  "description": "基于系统索引的文件搜索（Windows: Everything；macOS: Spotlight）",
   "keywords": [
     "everything",
+    "spotlight",
+    "mdfind",
+    "索引",
     "文件搜索",
     "文件",
     "搜索",
@@ -15,7 +18,8 @@
     "sousuo",
     "ss",
     "everything搜索",
-    "everything文件搜索"
+    "everything文件搜索",
+    "spotlight搜索"
   ],
   "entry": "./index.ts",
   "enabled": true

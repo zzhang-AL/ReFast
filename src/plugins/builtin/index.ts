@@ -9,10 +9,13 @@ export function createBuiltinPlugins(): Plugin[] {
   return [
     {
       id: "everything_search",
-      name: "Everything 文件搜索",
-      description: "使用 Everything 进行快速文件搜索",
+      name: "文件搜索（索引）",
+      description: "基于系统索引的文件搜索（Windows: Everything；macOS: Spotlight）",
       keywords: [
         "everything",
+        "spotlight",
+        "mdfind",
+        "索引",
         "文件搜索",
         "文件",
         "搜索",
@@ -26,7 +29,7 @@ export function createBuiltinPlugins(): Plugin[] {
         "everything文件搜索",
       ],
       execute: async (context) => {
-        // 打开独立的 Everything 搜索窗口
+        // 打开独立的文件搜索窗口（内部实现依平台选择索引引擎）
         if (context.tauriApi) {
           await context.tauriApi.showEverythingSearchWindow();
           // 关闭启动器

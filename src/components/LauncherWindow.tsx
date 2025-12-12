@@ -26,6 +26,7 @@ import { getThemeConfig, getLayoutConfig, type ResultStyle } from "../utils/them
 import { handleEscapeKey, closePluginModalAndHide, closeMemoModalAndHide } from "../utils/launcherHandlers";
 import { clearAllResults, resetSelectedIndices, selectFirstHorizontal, selectFirstVertical } from "../utils/resultUtils";
 import { adjustWindowSize, getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
+import { detectPlatform, getFileIndexEngineLabel, supportsEverythingInstallActions } from "../utils/platform";
 
 type SearchResult = {
   type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
@@ -44,6 +45,10 @@ type SearchResult = {
 
 
 export function LauncherWindow() {
+  const platform = useMemo(() => detectPlatform(), []);
+  const fileIndexEngineLabel = useMemo(() => getFileIndexEngineLabel(platform), [platform]);
+  const canManageEverything = useMemo(() => supportsEverythingInstallActions(platform), [platform]);
+
   const [query, setQuery] = useState("");
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [filteredApps, setFilteredApps] = useState<AppInfo[]>([]);
@@ -414,7 +419,7 @@ export function LauncherWindow() {
     };
   }, []);
 
-  // Check if Everything is available on mount
+  // 检查索引引擎状态（Windows: Everything / macOS: Spotlight）
   useEffect(() => {
     const checkEverything = async () => {
       try {
@@ -422,35 +427,38 @@ export function LauncherWindow() {
         setIsEverythingAvailable(status.available);
         setEverythingError(status.error || null);
         
-        // Get Everything path and version for debugging
-        if (status.available) {
+        // 仅 Windows 才有“安装路径/版本/下载/启动”等语义
+        if (status.available && canManageEverything) {
           try {
             const path = await tauriApi.getEverythingPath();
             setEverythingPath(path);
             if (path) {
-              console.log("Everything found at:", path);
+              console.log("Index engine found at:", path);
             }
             
-            // Get Everything version
+            // Get engine version
             try {
               const version = await tauriApi.getEverythingVersion();
               setEverythingVersion(version);
               if (version) {
-                console.log("Everything version:", version);
+                console.log("Index engine version:", version);
               }
             } catch (error) {
-              console.error("Failed to get Everything version:", error);
+              console.error("Failed to get index engine version:", error);
             }
           } catch (error) {
-            console.error("Failed to get Everything path:", error);
+            console.error("Failed to get index engine path:", error);
           }
+        } else if (status.available) {
+          setEverythingPath(null);
+          setEverythingVersion(null);
         } else {
-          console.warn("Everything is not available:", status.error);
+          console.warn("Index engine is not available:", status.error);
           setEverythingPath(null);
           setEverythingVersion(null);
         }
       } catch (error) {
-        console.error("Failed to check Everything availability:", error);
+        console.error("Failed to check index engine availability:", error);
         setIsEverythingAvailable(false);
         setEverythingPath(null);
         setEverythingVersion(null);
@@ -458,7 +466,7 @@ export function LauncherWindow() {
       }
     };
     checkEverything();
-  }, []);
+  }, [canManageEverything]);
 
   // Load all memos on mount (for quick search)
   useEffect(() => {
@@ -555,8 +563,9 @@ export function LauncherWindow() {
     };
   }, []);
 
-  // Listen for Everything download progress events
+  // 仅 Windows 才会有 Everything 下载进度事件
   useEffect(() => {
+    if (!canManageEverything) return;
     if (!isDownloadingEverything) return;
 
     let unlistenFn: (() => void) | null = null;
@@ -575,7 +584,7 @@ export function LauncherWindow() {
         unlistenFn();
       }
     };
-  }, [isDownloadingEverything]);
+  }, [isDownloadingEverything, canManageEverything]);
 
   // Adjust window size when memo modal is shown
   useEffect(() => {
@@ -4440,9 +4449,9 @@ export function LauncherWindow() {
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
                             className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("everything", isSelected)}`}
-                            title="来自 Everything 搜索结果"
+                            title={`来自 ${fileIndexEngineLabel} 搜索结果`}
                           >
-                            Everything
+                            {fileIndexEngineLabel}
                           </span>
                         </div>
                       )}
@@ -4480,7 +4489,7 @@ export function LauncherWindow() {
                     {isSearchingEverything ? (
                       <>
                         <div className="inline-block animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
-                        <span className="text-blue-600">Everything 搜索中...</span>
+                        <span className="text-blue-600">文件搜索（{fileIndexEngineLabel}）中...</span>
                       </>
                     ) : (
                       <>
@@ -4488,7 +4497,7 @@ export function LauncherWindow() {
                           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                         </svg>
                         <span>
-                          Everything: {everythingTotalCount !== null 
+                          {fileIndexEngineLabel}: {everythingTotalCount !== null 
                             ? `找到 ${everythingTotalCount.toLocaleString()} 个结果` 
                             : everythingResults.length > 0
                             ? `找到 ${everythingResults.length.toLocaleString()} 个结果`
@@ -4544,19 +4553,31 @@ export function LauncherWindow() {
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 <div 
                   className="flex items-center gap-1 cursor-help whitespace-nowrap" 
-                  title={everythingPath ? `Everything 路径: ${everythingPath}` : 'Everything 未安装或未在 PATH 中'}
+                  title={
+                    canManageEverything
+                      ? everythingPath
+                        ? `索引引擎：${fileIndexEngineLabel}（路径：${everythingPath}）`
+                        : `索引引擎：${fileIndexEngineLabel}（未安装或未在 PATH 中）`
+                      : `索引引擎：${fileIndexEngineLabel}`
+                  }
                 >
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${isEverythingAvailable ? 'bg-green-500' : 'bg-gray-300'}`}></div>
                   <span className={isEverythingAvailable ? 'text-green-600' : 'text-gray-400'}>
-                    {isEverythingAvailable ? 'Everything 已启用' : (
-                      everythingError?.startsWith("NOT_INSTALLED") 
-                        ? 'Everything 未安装' 
-                        : everythingError?.startsWith("SERVICE_NOT_RUNNING")
-                        ? 'Everything 服务未运行'
-                        : 'Everything 未检测到'
-                    )}
+                    {isEverythingAvailable
+                      ? `${fileIndexEngineLabel} 已启用`
+                      : canManageEverything
+                      ? (everythingError?.startsWith("NOT_INSTALLED")
+                          ? `${fileIndexEngineLabel} 未安装`
+                          : everythingError?.startsWith("SERVICE_NOT_RUNNING")
+                          ? `${fileIndexEngineLabel} 服务未运行`
+                          : `${fileIndexEngineLabel} 未检测到`)
+                      : "索引引擎不可用"}
                   </span>
-                  {everythingError && !isEverythingAvailable && !everythingError.startsWith("NOT_INSTALLED") && !everythingError.startsWith("SERVICE_NOT_RUNNING") && (
+                  {everythingError &&
+                    !isEverythingAvailable &&
+                    canManageEverything &&
+                    !everythingError.startsWith("NOT_INSTALLED") &&
+                    !everythingError.startsWith("SERVICE_NOT_RUNNING") && (
                     <span className="text-xs text-red-500 ml-2 whitespace-nowrap" title={everythingError}>
                       ({everythingError.split(':')[0]})
                     </span>
@@ -4564,16 +4585,19 @@ export function LauncherWindow() {
                 </div>
                 {!isEverythingAvailable && (
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {everythingError && everythingError.startsWith("SERVICE_NOT_RUNNING") && (
+                    {canManageEverything &&
+                      everythingError &&
+                      everythingError.startsWith("SERVICE_NOT_RUNNING") && (
                       <button
                         onClick={handleStartEverything}
                         className="px-2 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition-colors whitespace-nowrap"
-                        title="启动 Everything"
+                        title={`启动 ${fileIndexEngineLabel}`}
                       >
                         启动
                       </button>
                     )}
-                    {(!everythingError || !everythingError.startsWith("SERVICE_NOT_RUNNING")) && (
+                    {canManageEverything &&
+                      (!everythingError || !everythingError.startsWith("SERVICE_NOT_RUNNING")) && (
                       <button
                         onClick={handleDownloadEverything}
                         disabled={isDownloadingEverything}
@@ -4582,7 +4606,7 @@ export function LauncherWindow() {
                             ? 'bg-gray-400 text-white cursor-not-allowed'
                             : 'bg-blue-500 text-white hover:bg-blue-600'
                         }`}
-                        title="下载并安装 Everything"
+                        title={`下载并安装 ${fileIndexEngineLabel}`}
                       >
                         {isDownloadingEverything ? `下载中 ${everythingDownloadProgress}%` : '下载'}
                       </button>
@@ -4590,7 +4614,7 @@ export function LauncherWindow() {
                     <button
                       onClick={handleCheckAgain}
                       className="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors whitespace-nowrap"
-                      title="重新检测 Everything"
+                      title="重新检测索引引擎"
                     >
                       刷新
                     </button>

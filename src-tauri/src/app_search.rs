@@ -62,7 +62,9 @@ pub mod windows {
     }
 
     // Windows-specific implementation
-    pub fn scan_start_menu(tx: Option<std::sync::mpsc::Sender<(u8, String)>>) -> Result<Vec<AppInfo>, String> {
+    pub fn scan_start_menu_with_progress(
+        tx: Option<std::sync::mpsc::Sender<(u8, String)>>,
+    ) -> Result<Vec<AppInfo>, String> {
         let mut apps = Vec::new();
 
         // Common start menu paths - scan user, local user, and system start menus
@@ -1549,6 +1551,10 @@ public class IconExtractor {
         })
     }
 
+    pub fn scan_start_menu() -> Result<Vec<AppInfo>, String> {
+        scan_start_menu_with_progress(None)
+    }
+
     pub fn search_apps(query: &str, apps: &[AppInfo]) -> Vec<AppInfo> {
         if query.is_empty() {
             return apps.iter().take(10).cloned().collect();
@@ -1766,15 +1772,486 @@ public class IconExtractor {
 pub mod windows {
     use super::*;
 
+    pub fn get_cache_file_path(app_data_dir: &Path) -> PathBuf {
+        app_data_dir.join("app_cache.json")
+    }
+
+    pub fn load_cache(app_data_dir: &Path) -> Result<Vec<AppInfo>, String> {
+        let cache_file = get_cache_file_path(app_data_dir);
+        if !cache_file.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = fs::read_to_string(&cache_file)
+            .map_err(|e| format!("Failed to read cache file: {}", e))?;
+
+        let apps: Vec<AppInfo> =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse cache file: {}", e))?;
+
+        Ok(apps)
+    }
+
+    pub fn save_cache(app_data_dir: &Path, apps: &[AppInfo]) -> Result<(), String> {
+        if !app_data_dir.exists() {
+            fs::create_dir_all(app_data_dir)
+                .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+        }
+
+        let cache_file = get_cache_file_path(app_data_dir);
+        let json_string =
+            serde_json::to_string_pretty(apps).map_err(|e| format!("Failed to serialize cache: {}", e))?;
+
+        fs::write(&cache_file, json_string)
+            .map_err(|e| format!("Failed to write cache file: {}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn scan_start_menu() -> Result<Vec<AppInfo>, String> {
+        use pinyin::ToPinyin;
+        use std::collections::HashSet;
+        use std::env;
+
+        // 说明：虽然函数名叫 scan_start_menu（历史原因），但在 macOS 实际扫描 Applications 目录下的 .app 包。
+        let mut apps: Vec<AppInfo> = Vec::new();
+        let mut seen_paths: HashSet<String> = HashSet::new();
+
+        let mut roots: Vec<PathBuf> = vec![
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            PathBuf::from("/Applications/Utilities"),
+            PathBuf::from("/System/Applications/Utilities"),
+        ];
+
+        if let Ok(home) = env::var("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+
+        for root in roots {
+            if !root.exists() {
+                continue;
+            }
+            // 容错：某些目录可能无权限/读失败，尽量不中断整体扫描
+            let _ = scan_dir_for_apps(&root, 0, 4, &mut apps, &mut seen_paths);
+        }
+
+        apps.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(apps)
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn scan_start_menu() -> Result<Vec<AppInfo>, String> {
         Err("App search is only supported on Windows".to_string())
     }
 
-    pub fn search_apps(_query: &str, _apps: &[AppInfo]) -> Vec<AppInfo> {
-        vec![]
+    pub fn search_apps(query: &str, apps: &[AppInfo]) -> Vec<AppInfo> {
+        // 非 Windows 平台保持与 Windows 相同的搜索体验（大小写不敏感 + 拼音匹配）。
+        if query.is_empty() {
+            return apps.iter().take(10).cloned().collect();
+        }
+
+        let query_lower = query.to_lowercase();
+        let query_is_pinyin = !contains_chinese(&query_lower);
+
+        let mut results: Vec<(usize, i32)> = Vec::with_capacity(20);
+
+        for (idx, app) in apps.iter().enumerate() {
+            let mut score = 0;
+            let name_lower = app.name.to_lowercase();
+
+            if name_lower == query_lower {
+                score += 1000;
+            } else if name_lower.starts_with(&query_lower) {
+                score += 500;
+            } else if name_lower.contains(&query_lower) {
+                score += 100;
+            }
+
+            if query_is_pinyin {
+                if let (Some(ref name_pinyin), Some(ref name_pinyin_initials)) =
+                    (&app.name_pinyin, &app.name_pinyin_initials)
+                {
+                    if name_pinyin.as_str() == query_lower {
+                        score += 800;
+                    } else if name_pinyin.starts_with(&query_lower) {
+                        score += 400;
+                    } else if name_pinyin.contains(&query_lower) {
+                        score += 150;
+                    }
+
+                    if name_pinyin_initials.as_str() == query_lower {
+                        score += 600;
+                    } else if name_pinyin_initials.starts_with(&query_lower) {
+                        score += 300;
+                    } else if name_pinyin_initials.contains(&query_lower) {
+                        score += 120;
+                    }
+                }
+            }
+
+            if score == 0 {
+                let path_lower = app.path.to_lowercase();
+                if path_lower.contains(&query_lower) {
+                    score += 10;
+                }
+            }
+
+            if score > 0 {
+                results.push((idx, score));
+            }
+        }
+
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results
+            .into_iter()
+            .take(20)
+            .map(|(idx, _)| apps[idx].clone())
+            .collect()
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn launch_app(app: &AppInfo) -> Result<(), String> {
+        let path_str = app.path.trim();
+        if path_str.is_empty() {
+            return Err("Application path is empty".to_string());
+        }
+
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("Application not found: {}", app.path));
+        }
+
+        Command::new("open")
+            .arg(path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to launch application: {}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn launch_app(_app: &AppInfo) -> Result<(), String> {
         Err("App launch is only supported on Windows".to_string())
+    }
+
+    pub fn extract_lnk_icon_base64(_path: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// 提取 macOS `.app` 的图标并转为 `data:image/png;base64,...`。
+    /// <p>
+    /// 说明：
+    /// - Windows 侧通过解析 `.lnk/.exe` 资源获取图标；macOS 侧对应的是 `.app` bundle。
+    /// - 这里优先读取 `Info.plist` 的图标字段，找不到则在 `Contents/Resources` 里兜底找 `.icns`。
+    /// - 转换使用系统自带 `sips`，避免新增额外 crate（也更符合离线约束）。
+    /// </p>
+    #[cfg(target_os = "macos")]
+    pub fn extract_icon_base64(path: &str) -> Result<Option<String>, String> {
+        use base64::{engine::general_purpose, Engine as _};
+        use serde_json::Value;
+        use std::hash::{Hash, Hasher};
+        use std::io::Read;
+
+        let app_path = Path::new(path);
+        let is_app_bundle = app_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("app"))
+            .unwrap_or(false);
+        if !is_app_bundle {
+            return Ok(None);
+        }
+        if !app_path.exists() {
+            return Ok(None);
+        }
+
+        let resources_dir = app_path.join("Contents").join("Resources");
+        let info_plist_path = app_path.join("Contents").join("Info.plist");
+
+        fn normalize_icns_file_name(name: &str) -> String {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return String::new();
+            }
+            if trimmed.to_lowercase().ends_with(".icns") {
+                return trimmed.to_string();
+            }
+            format!("{trimmed}.icns")
+        }
+
+        fn pick_icns_from_resources(resources_dir: &Path) -> Option<PathBuf> {
+            let entries = fs::read_dir(resources_dir).ok()?;
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("icns"))
+                    .unwrap_or(false)
+                {
+                    candidates.push(p);
+                }
+            }
+            if candidates.is_empty() {
+                return None;
+            }
+            // 经验优先：AppIcon.icns / 含 AppIcon 的文件名
+            candidates.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+            if let Some(p) = candidates
+                .iter()
+                .find(|p| p.file_name().and_then(|s| s.to_str()) == Some("AppIcon.icns"))
+            {
+                return Some(p.clone());
+            }
+            if let Some(p) = candidates.iter().find(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase().contains("appicon"))
+                    .unwrap_or(false)
+            }) {
+                return Some(p.clone());
+            }
+            candidates.first().cloned()
+        }
+
+        // 1) 先从 Info.plist 解析图标名
+        let mut icns_path: Option<PathBuf> = None;
+        if info_plist_path.exists() {
+            let output = Command::new("plutil")
+                .arg("-convert")
+                .arg("json")
+                .arg("-o")
+                .arg("-")
+                .arg(&info_plist_path)
+                .output();
+
+            if let Ok(out) = output {
+                if out.status.success() {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) {
+                        // 优先 CFBundleIconFile
+                        let icon_file = v
+                            .get("CFBundleIconFile")
+                            .and_then(|x| x.as_str())
+                            .map(normalize_icns_file_name)
+                            .filter(|s| !s.is_empty());
+
+                        if let Some(icon_name) = icon_file {
+                            let candidate = resources_dir.join(icon_name);
+                            if candidate.exists() {
+                                icns_path = Some(candidate);
+                            }
+                        }
+
+                        // 次选 CFBundleIcons -> CFBundlePrimaryIcon -> CFBundleIconFiles (array)
+                        if icns_path.is_none() {
+                            let icon_files = v
+                                .get("CFBundleIcons")
+                                .and_then(|x| x.as_object())
+                                .and_then(|m| m.get("CFBundlePrimaryIcon"))
+                                .and_then(|x| x.as_object())
+                                .and_then(|m| m.get("CFBundleIconFiles"))
+                                .and_then(|x| x.as_array());
+
+                            if let Some(arr) = icon_files {
+                                // 取最后一个，通常是最大尺寸的 icon（经验规则）
+                                if let Some(last) = arr.iter().rev().find_map(|x| x.as_str()) {
+                                    let icon_name = normalize_icns_file_name(last);
+                                    if !icon_name.is_empty() {
+                                        let candidate = resources_dir.join(icon_name);
+                                        if candidate.exists() {
+                                            icns_path = Some(candidate);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) 兜底：Resources 里随便找一个 .icns
+        if icns_path.is_none() {
+            icns_path = pick_icns_from_resources(&resources_dir);
+        }
+
+        let icns_path = match icns_path {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // 3) 使用 sips 转换为 png（输出到临时目录，带缓存）
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        icns_path.to_string_lossy().hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let icon_cache_dir = std::env::temp_dir().join("re-fast-icons");
+        fs::create_dir_all(&icon_cache_dir)
+            .map_err(|e| format!("创建图标缓存目录失败: {}", e))?;
+        let png_path = icon_cache_dir.join(format!("{hash}.png"));
+
+        if !png_path.exists() {
+            let out = Command::new("sips")
+                .arg("-Z")
+                .arg("128")
+                .arg("-s")
+                .arg("format")
+                .arg("png")
+                .arg(&icns_path)
+                .arg("--out")
+                .arg(&png_path)
+                .output()
+                .map_err(|e| format!("sips 执行失败: {}", e))?;
+            if !out.status.success() {
+                return Ok(None);
+            }
+        }
+
+        let mut file = fs::File::open(&png_path).map_err(|e| format!("读取 png 失败: {}", e))?;
+        let mut buf: Vec<u8> = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(|e| format!("读取 png 失败: {}", e))?;
+
+        let b64 = general_purpose::STANDARD.encode(buf);
+        Ok(Some(format!("data:image/png;base64,{}", b64)))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn extract_icon_base64(_path: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    pub fn extract_uwp_app_icon_base64(_path: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    // -------------------------
+    // macOS 扫描与拼音辅助方法
+    // -------------------------
+    #[cfg(target_os = "macos")]
+    fn scan_dir_for_apps(
+        dir: &Path,
+        depth: usize,
+        max_depth: usize,
+        apps: &mut Vec<AppInfo>,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> Result<(), String> {
+        if depth > max_depth {
+            return Ok(());
+        }
+
+        let entries = match fs::read_dir(dir) {
+            Ok(v) => v,
+            Err(_) => return Ok(()),
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            // 跳过隐藏目录，减少无意义遍历
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+            }
+
+            // 发现 .app 目录则视为一个应用，不再深入其 Contents
+            let is_app_bundle = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("app"))
+                .unwrap_or(false);
+
+            if is_app_bundle {
+                let info = build_app_info_from_bundle(&path)?;
+                if seen.insert(info.path.clone()) {
+                    apps.push(info);
+                }
+                continue;
+            }
+
+            if depth < max_depth {
+                let _ = scan_dir_for_apps(&path, depth + 1, max_depth, apps, seen);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn build_app_info_from_bundle(app_path: &Path) -> Result<AppInfo, String> {
+        use pinyin::ToPinyin;
+
+        let name = app_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let (name_pinyin, name_pinyin_initials) = if contains_chinese(&name) {
+            (
+                Some(to_pinyin(&name).to_lowercase()),
+                Some(to_pinyin_initials(&name).to_lowercase()),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(AppInfo {
+            name,
+            path: app_path.to_string_lossy().to_string(),
+            icon: None,
+            description: None,
+            name_pinyin,
+            name_pinyin_initials,
+        })
+    }
+
+    // Convert Chinese characters to pinyin (full pinyin)
+    fn to_pinyin(text: &str) -> String {
+        use pinyin::ToPinyin;
+        text.to_pinyin()
+            .filter_map(|p| p.map(|p| p.plain()))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    // Convert Chinese characters to pinyin initials (first letter of each pinyin)
+    fn to_pinyin_initials(text: &str) -> String {
+        use pinyin::ToPinyin;
+        text.to_pinyin()
+            .filter_map(|p| p.map(|p| p.plain().chars().next()))
+            .flatten()
+            .collect::<String>()
+    }
+
+    // Check if text contains Chinese characters
+    fn contains_chinese(text: &str) -> bool {
+        text.chars().any(|c| {
+            matches!(
+                c as u32,
+                0x4E00..=0x9FFF |  // CJK Unified Ideographs
+                0x3400..=0x4DBF |  // CJK Extension A
+                0x20000..=0x2A6DF | // CJK Extension B
+                0x2A700..=0x2B73F | // CJK Extension C
+                0x2B740..=0x2B81F | // CJK Extension D
+                0xF900..=0xFAFF |  // CJK Compatibility Ideographs
+                0x2F800..=0x2FA1F   // CJK Compatibility Ideographs Supplement
+            )
+        })
     }
 }

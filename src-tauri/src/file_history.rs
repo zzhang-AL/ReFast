@@ -1,5 +1,4 @@
 use crate::db;
-#[cfg(target_os = "windows")]
 use pinyin::ToPinyin;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -198,7 +197,6 @@ pub fn add_file_path(path: String, app_data_dir: &Path) -> Result<(), String> {
 }
 
 // Convert Chinese characters to pinyin (full pinyin)
-#[cfg(target_os = "windows")]
 fn to_pinyin(text: &str) -> String {
     text.to_pinyin()
         .filter_map(|p| p.map(|p| p.plain()))
@@ -207,7 +205,6 @@ fn to_pinyin(text: &str) -> String {
 }
 
 // Convert Chinese characters to pinyin initials (first letter of each pinyin)
-#[cfg(target_os = "windows")]
 fn to_pinyin_initials(text: &str) -> String {
     text.to_pinyin()
         .filter_map(|p| p.map(|p| p.plain().chars().next()))
@@ -216,7 +213,6 @@ fn to_pinyin_initials(text: &str) -> String {
 }
 
 // Check if text contains Chinese characters
-#[cfg(target_os = "windows")]
 fn contains_chinese(text: &str) -> bool {
     text.chars().any(|c| {
         matches!(c as u32,
@@ -263,7 +259,6 @@ pub fn search_in_history(
     }
 
     let query_lower = query.to_lowercase();
-    #[cfg(target_os = "windows")]
     let query_is_pinyin = !contains_chinese(&query_lower);
 
     let mut results: Vec<(FileHistoryItem, i32)> = state
@@ -283,8 +278,7 @@ pub fn search_in_history(
                 score += 100;
             }
 
-            // Pinyin matching (if query is pinyin, Windows only)
-            #[cfg(target_os = "windows")]
+            // 拼音匹配（支持全拼/首字母）
             if query_is_pinyin {
                 let name_pinyin = to_pinyin(&item.name).to_lowercase();
                 let name_pinyin_initials = to_pinyin_initials(&item.name).to_lowercase();
@@ -577,14 +571,29 @@ pub fn launch_file(path: &str) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        // On Unix-like systems, use xdg-open
+        // macOS 使用 open 打开文件/目录
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("Failed to launch file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        // Linux 使用 xdg-open 打开文件/目录
         Command::new("xdg-open")
             .arg(path)
             .spawn()
             .map_err(|e| format!("Failed to launch file: {}", e))?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        return Err("Launch file is not supported on this platform".to_string());
     }
 
     Ok(())

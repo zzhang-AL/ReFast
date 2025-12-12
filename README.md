@@ -1,7 +1,7 @@
 # ReFast
 
 <div align="center">
-  <h3>基于 Tauri 2 的 Windows 快速启动器</h3>
+  <h3>基于 Tauri 2 的跨平台快速启动器</h3>
   <p>类似 utools，让你快速启动应用、搜索文件、管理备忘录</p>
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
@@ -21,12 +21,12 @@
 
 ## 技术栈
 
-- **框架**: Tauri 2.x (支持跨平台，但当前项目主要适配 Windows)
+- **框架**: Tauri 2.x
 - **前端**: React + TypeScript + Tailwind CSS
 - **后端**: Rust
-- **平台**: Windows 10/11
+- **平台**: Windows 10/11、macOS（Apple Silicon）
 
-> **注意**: 由于作者精力有限，目前主要适配 Windows 平台。虽然 Tauri 框架本身支持 macOS 和 Linux，但项目中的部分功能（如 Everything 搜索、Windows 系统文件夹搜索等）是 Windows 特定的。欢迎社区贡献跨平台实现！
+> **注意**: 文件索引引擎因平台不同而不同：Windows 使用 Everything；macOS 使用 Spotlight（mdfind）。界面统一称为“文件搜索/文件索引”，并在页面内展示当前引擎。
 
 ## 项目结构
 
@@ -43,7 +43,7 @@ re-fast/
 │   │   ├── commands.rs    # Tauri 命令定义
 │   │   ├── launcher.rs    # 启动器核心功能
 │   │   ├── hotkey.rs      # 全局快捷键
-│   │   ├── everything_search.rs  # Everything 搜索集成
+│   │   ├── everything_search.rs  # 文件索引搜索集成（Windows: Everything / macOS: Spotlight）
 │   │   ├── app_search.rs  # 应用搜索
 │   │   ├── memos.rs       # 备忘录功能
 │   │   ├── error.rs       # 错误处理
@@ -82,7 +82,7 @@ npm run build:tauri
 
 ### 核心功能
 - 🚀 **快速启动器** - 通过全局快捷键快速呼出，支持应用、文件、备忘录搜索
-- 🔍 **智能搜索** - 集成 Everything 搜索，支持应用搜索、文件历史、系统文件夹搜索，智能排序确保常用结果优先显示
+- 🔍 **智能搜索** - 集成文件索引搜索（Windows: Everything / macOS: Spotlight），支持应用搜索、文件历史、系统文件夹搜索，智能排序确保常用结果优先显示
 - 📝 **备忘录中心** - 快速记录和检索备忘信息
 - 🔧 **插件系统** - 支持自定义插件扩展功能
 - ⌨️ **全局快捷键** - 自定义快捷键配置
@@ -104,7 +104,7 @@ npm run build:tauri
 ### 已完成
 - ✅ 快速启动器核心功能
 - ✅ 应用搜索和启动
-- ✅ Everything 搜索集成
+- ✅ 文件索引搜索集成（Windows: Everything / macOS: Spotlight）
 - ✅ 文件历史记录
 - ✅ 备忘录功能
 - ✅ 全局快捷键支持
@@ -161,10 +161,10 @@ npm run build:tauri
 - 🔢 使用 mathjs 库处理浮点数精度问题，避免计算误差
 - 📋 支持单行结果复制和全部结果复制
 - ⌨️ 支持键盘快捷键：Enter 添加新行、Backspace 删除行、↑/↓ 导航
-- 🔍 优化搜索结果排序算法，历史文件结果优先于 Everything 结果
+- 🔍 优化搜索结果排序算法，历史文件结果优先于索引结果
 - 📊 历史文件结果获得额外加分（基础加分 300 分 + 文件名匹配加权 30%）
 - 📈 使用次数越多的历史文件，排序越靠前（使用次数加分最多 200 分）
-- ⚡ 评分差距在 200 分以内时，历史文件优先于 Everything 结果显示
+- ⚡ 评分差距在 200 分以内时，历史文件优先于索引结果显示
 
 ### v1.0.14
 - 🔍 优化应用搜索排序算法，应用优先显示
@@ -180,7 +180,7 @@ npm run build:tauri
 ### v1.0.0+
 - ✅ 快速启动器核心功能
 - ✅ 应用搜索和启动
-- ✅ Everything 搜索集成
+- ✅ 文件索引搜索集成（Windows: Everything / macOS: Spotlight）
 - ✅ 文件历史记录
 - ✅ 备忘录功能
 - ✅ 全局快捷键支持

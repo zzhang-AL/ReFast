@@ -11,6 +11,7 @@ mod hotkey;
 mod hotkey_handler;
 // mod keyboard_hook; // 已不再需要，hotkey_handler 已支持双击修饰键
 mod db;
+mod platform;
 mod plugin_usage;
 mod memos;
 mod open_history;
@@ -30,6 +31,7 @@ use tauri::{
     Emitter,
 };
 use std::sync::{Arc, Mutex};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 // 全局锁文件句柄，确保文件在程序运行期间保持打开
 static LOCK_FILE: Mutex<Option<Arc<std::fs::File>>> = Mutex::new(None);
@@ -229,6 +231,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Create system tray menu
             let app_center = MenuItem::with_id(app, "app_center", "应用中心", true, None::<&str>)?;
@@ -514,6 +517,17 @@ fn main() {
                     Err(e) => {
                         eprintln!("[Main] Failed to start multi-hotkey listener: {}", e);
                     }
+                }
+            }
+
+            // macOS：使用 tauri-plugin-global-shortcut 注册启动器快捷键（默认 Command+Space）
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = app.handle().clone();
+                if let Err(e) = register_macos_hotkeys(&app_handle, &app_data_dir) {
+                    eprintln!("[Main] Failed to register macOS hotkeys: {}", e);
+                } else {
+                    eprintln!("[Main] macOS hotkeys registered");
                 }
             }
 

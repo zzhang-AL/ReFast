@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { tauriApi } from "../api/tauri";
 import type { EverythingResult, FilePreview } from "../types";
+import { detectPlatform, getFileIndexEngineLabel } from "../utils/platform";
 
 type SortKey = "modified" | "size" | "type" | "name";
 type SortOrder = "asc" | "desc";
@@ -70,6 +71,9 @@ const QUICK_FILTERS: FilterItem[] = [
 ];
 
 export function EverythingSearchWindow() {
+  const platform = useMemo(() => detectPlatform(), []);
+  const engineLabel = useMemo(() => getFileIndexEngineLabel(platform), [platform]);
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<EverythingResult[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
@@ -118,7 +122,7 @@ export function EverythingSearchWindow() {
         if (Array.isArray(parsed)) setCustomFilters(parsed);
       }
     } catch (error) {
-      console.warn("加载 Everything 偏好失败", error);
+      console.warn("加载文件搜索偏好失败", error);
     }
   }, []);
 
@@ -150,7 +154,7 @@ export function EverythingSearchWindow() {
     }
   }, [customFilters]);
 
-  // 检查 Everything 状态
+  // 检查索引引擎状态（Windows: Everything / macOS: Spotlight）
   useEffect(() => {
     const checkStatus = async () => {
       try {
@@ -158,7 +162,7 @@ export function EverythingSearchWindow() {
         setIsEverythingAvailable(status.available);
         setEverythingError(status.error || null);
       } catch (error) {
-        console.error("Failed to check Everything status:", error);
+        console.error("Failed to check file index engine status:", error);
         setIsEverythingAvailable(false);
       }
     };
@@ -192,7 +196,7 @@ export function EverythingSearchWindow() {
           setCurrentCount(current_count);
         });
       } catch (error) {
-        console.error("Failed to setup Everything batch listener:", error);
+        console.error("Failed to setup file search batch listener:", error);
       }
     };
 
@@ -276,7 +280,7 @@ export function EverythingSearchWindow() {
       if (currentSearchRef.current?.cancelled) {
         return;
       }
-      console.error("Failed to search Everything:", error);
+      console.error("Failed to search file index:", error);
       setResults([]);
       setTotalCount(null);
       setCurrentCount(0);
@@ -505,7 +509,10 @@ export function EverythingSearchWindow() {
     <div className="h-screen w-screen flex flex-col bg-gray-50">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white">
-        <h2 className="text-lg font-semibold text-gray-800">Everything 文件搜索</h2>
+        <h2 className="text-lg font-semibold text-gray-800">
+          文件搜索
+          <span className="ml-2 text-xs font-normal text-gray-500">引擎：{engineLabel}</span>
+        </h2>
         <button
           onClick={handleClose}
           className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
@@ -609,7 +616,7 @@ export function EverythingSearchWindow() {
       {!isEverythingAvailable && (
         <div className="p-4 bg-yellow-50 border-b border-yellow-200">
           <div className="text-sm text-yellow-800">
-            Everything 不可用: {everythingError || "未知错误"}
+            索引引擎不可用（{engineLabel}）：{everythingError || "未知错误"}
           </div>
         </div>
       )}
@@ -770,4 +777,3 @@ function formatDate(dateStr?: string): string {
     .toString()
     .padStart(2, "0")}`;
 }
-

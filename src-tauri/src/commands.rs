@@ -6,7 +6,9 @@ use crate::hooks;
 use crate::memos;
 use crate::open_history;
 use crate::plugin_usage;
-use crate::recording::{RecordingMeta, RecordingState};
+use crate::recording::{RecordedEvent, RecordingMeta, RecordingState};
+#[cfg(target_os = "macos")]
+use crate::platform::macos::SpotlightSearchProvider;
 use crate::replay::ReplayState;
 use crate::settings;
 use crate::shortcuts;
@@ -23,6 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use tauri::{async_runtime, Emitter, Manager};
+#[cfg(target_os = "macos")]
+use crate::platform::SearchProvider;
 
 static RECORDING_STATE: LazyLock<Arc<Mutex<RecordingState>>> =
     LazyLock::new(|| Arc::new(Mutex::new(RecordingState::new())));
@@ -68,6 +72,14 @@ pub fn get_app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("recordings"))
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn register_macos_hotkeys(
+    app: &tauri::AppHandle,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    crate::platform::macos::register_macos_hotkeys(app, app_data_dir)
+}
+
 #[tauri::command]
 pub fn get_recording_status() -> Result<bool, String> {
     let state = RECORDING_STATE.clone();
@@ -77,11 +89,14 @@ pub fn get_recording_status() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn start_recording() -> Result<(), String> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        return Err("Recording is only supported on Windows".to_string());
+        crate::platform::macos::start_recording()?;
+        return Ok(());
     }
 
+    #[cfg(target_os = "windows")]
+    {
     let state = RECORDING_STATE.clone();
     let mut state_guard = state.lock().map_err(|e| e.to_string())?;
 
@@ -104,15 +119,20 @@ pub fn start_recording() -> Result<(), String> {
     hooks::windows::install_hooks(state.clone())?;
 
     Ok(())
+    }
 }
 
 #[tauri::command]
 pub fn stop_recording(app: tauri::AppHandle) -> Result<String, String> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        return Err("Recording is only supported on Windows".to_string());
+        let events = crate::platform::macos::stop_recording()?;
+        let duration_ms = events.last().map(|e| e.time_offset_ms).unwrap_or(0);
+        return persist_recording(&app, events, duration_ms);
     }
 
+    #[cfg(target_os = "windows")]
+    {
     let state = RECORDING_STATE.clone();
     let mut state_guard = state.lock().map_err(|e| e.to_string())?;
 
@@ -130,8 +150,17 @@ pub fn stop_recording(app: tauri::AppHandle) -> Result<String, String> {
     // Uninstall Windows hooks
     hooks::windows::uninstall_hooks()?;
 
+    persist_recording(&app, events, duration_ms)
+    }
+}
+
+fn persist_recording(
+    app: &tauri::AppHandle,
+    events: Vec<RecordedEvent>,
+    duration_ms: u64,
+) -> Result<String, String> {
     // Save events to JSON file
-    let app_data_dir = get_app_data_dir(&app)?;
+    let app_data_dir = get_app_data_dir(app)?;
     let recordings_dir = app_data_dir.join("recordings");
 
     // Create recordings directory if it doesn't exist
@@ -276,11 +305,6 @@ fn extract_recording_meta(
 
 #[tauri::command]
 pub fn play_recording(app: tauri::AppHandle, path: String, speed: f32) -> Result<(), String> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        return Err("Replay is only supported on Windows".to_string());
-    }
-
     let mut state = REPLAY_STATE.lock().map_err(|e| e.to_string())?;
 
     if state.is_playing {
@@ -483,11 +507,11 @@ pub async fn scan_applications(app: tauri::AppHandle) -> Result<Vec<app_search::
                     disk_cache
                 } else {
                     // Scan applications (potentially slow) on background thread
-                    app_search::windows::scan_start_menu(None)?
+                    app_search::windows::scan_start_menu()?
                 }
             } else {
                 // Scan applications (potentially slow) on background thread
-                app_search::windows::scan_start_menu(None)?
+                app_search::windows::scan_start_menu()?
             }
         };
 
@@ -573,7 +597,7 @@ pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
             let _ = fs::remove_file(&cache_file); // Ignore errors if file doesn't exist
 
             // Force rescan with progress callback
-            let apps = app_search::windows::scan_start_menu(Some(tx))?;
+            let apps = app_search::windows::scan_start_menu()?;
 
             // Cache the results
             *cache_guard = Some(apps.clone());
@@ -670,14 +694,20 @@ pub async fn search_applications(
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_lowercase());
                 let icon = if ext == Some("lnk".to_string()) {
-                    app_search::windows::extract_lnk_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_lnk_icon_base64(path_str.as_ref())
                 } else if ext == Some("exe".to_string()) {
-                    app_search::windows::extract_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
+                } else if ext == Some("app".to_string()) {
+                    // macOS: `.app` bundle 图标提取
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
                 } else {
-                    None
+                    Ok(None)
                 };
 
-                if let Some(icon_data) = icon {
+                if let Ok(Some(icon_data)) = icon {
                     icon_updates.push((path_str.clone(), icon_data));
                 }
             }
@@ -759,15 +789,21 @@ pub async fn populate_app_icons(
                     .map(|s| s.to_lowercase());
                 
                 if ext == Some("lnk".to_string()) {
-                    app_search::windows::extract_lnk_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_lnk_icon_base64(path_str.as_ref())
                 } else if ext == Some("exe".to_string()) {
-                    app_search::windows::extract_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
+                } else if ext == Some("app".to_string()) {
+                    // macOS: `.app` bundle 图标提取
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
                 } else {
-                    None
+                    Ok(None)
                 }
             };
 
-            if let Some(icon_data) = icon {
+            if let Ok(Some(icon_data)) = icon {
                 app_info.icon = Some(icon_data);
                 updated = true;
             }
@@ -837,14 +873,20 @@ pub async fn debug_app_icon(app_name: String, app: tauri::AppHandle) -> Result<S
             if app_info.icon.is_none() {
                 result.push_str("  正在尝试提取图标...\n");
                 let icon_result = if ext == Some("lnk".to_string()) {
-                    app_search::windows::extract_lnk_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_lnk_icon_base64(path_str.as_ref())
                 } else if ext == Some("exe".to_string()) {
-                    app_search::windows::extract_icon_base64(path)
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
+                } else if ext == Some("app".to_string()) {
+                    // macOS: `.app` bundle 图标提取
+                    let path_str = path.to_string_lossy();
+                    app_search::windows::extract_icon_base64(path_str.as_ref())
                 } else {
-                    None
+                    Ok(None)
                 };
                 
-                if let Some(icon) = icon_result {
+                if let Ok(Some(icon)) = icon_result {
                     result.push_str("  ✓ 图标提取成功！\n");
                     result.push_str(&format!("  图标数据长度: {} 字节\n", icon.len()));
                 } else {
@@ -993,8 +1035,17 @@ pub fn search_system_folders(query: String) -> Result<Vec<SystemFolderResult>, S
 
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-pub fn search_system_folders(_query: String) -> Result<Vec<SystemFolderResult>, String> {
-    Ok(Vec::new())
+pub fn search_system_folders(query: String) -> Result<Vec<SystemFolderResult>, String> {
+    use crate::system_folders_search;
+    Ok(system_folders_search::windows::search_system_folders(&query)
+        .into_iter()
+        .map(|item| SystemFolderResult {
+            name: item.name,
+            path: item.path,
+            display_name: item.display_name,
+            is_folder: item.is_folder,
+        })
+        .collect())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -1207,10 +1258,10 @@ pub async fn search_everything(
     options: Option<EverythingSearchOptions>,
     app: tauri::AppHandle,
 ) -> Result<everything_search::EverythingSearchResponse, String> {
+    let (combined_query, max_results) = build_everything_query(&query, &options);
+
     #[cfg(target_os = "windows")]
     {
-        let (combined_query, max_results) = build_everything_query(&query, &options);
-
         // 为新搜索准备取消标志，同时通知旧搜索退出
         let cancel_flag = {
             let mut manager = SEARCH_TASK_MANAGER
@@ -1335,36 +1386,158 @@ pub async fn search_everything(
         .await
         .map_err(|e| format!("搜索任务失败: {}", e))?
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        use std::collections::HashSet;
+
+        let base_query = query.trim();
+        if base_query.is_empty() {
+            return Ok(everything_search::EverythingSearchResponse {
+                results: Vec::new(),
+                total_count: 0,
+            });
+        }
+
+        // macOS 使用 Spotlight(mdfind) 做文件名搜索，然后在 Rust 侧做扩展名/文件夹过滤，
+        // 避免把 Everything 的 ext:/file:/folder: 语法直接传给 mdfind 导致无结果。
+        let provider = SpotlightSearchProvider::new();
+        let candidates = provider.search(base_query, max_results as usize * 20)?;
+
+        let include_exts: Option<HashSet<String>> = options
+            .as_ref()
+            .and_then(|o| o.extensions.as_ref())
+            .map(|exts| {
+                exts.iter()
+                    .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+                    .filter(|e| !e.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .filter(|set| !set.is_empty());
+
+        let exclude_exts: Option<HashSet<String>> = options
+            .as_ref()
+            .and_then(|o| o.exclude_extensions.as_ref())
+            .map(|exts| {
+                exts.iter()
+                    .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+                    .filter(|e| !e.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .filter(|set| !set.is_empty());
+
+        let only_files = options
+            .as_ref()
+            .and_then(|o| o.only_files)
+            .unwrap_or(false);
+        let only_folders = options
+            .as_ref()
+            .and_then(|o| o.only_folders)
+            .unwrap_or(false);
+
+        let mut mapped: Vec<everything_search::EverythingResult> = Vec::with_capacity(max_results);
+        for item in candidates {
+            // SpotlightSearchProvider 已经尽量提供 is_folder，但这里仍以 metadata 为准补强
+            let meta = std::fs::metadata(&item.path).ok();
+            let is_folder = meta.as_ref().map(|m| m.is_dir()).unwrap_or(item.is_folder);
+
+            if only_files && is_folder {
+                continue;
+            }
+            if only_folders && !is_folder {
+                continue;
+            }
+
+            // 扩展名过滤：仅对“文件”生效，目录默认不参与扩展名筛选
+            if !is_folder {
+                let ext = std::path::Path::new(&item.path)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+
+                if let Some(ref includes) = include_exts {
+                    if ext.is_empty() || !includes.contains(&ext) {
+                        continue;
+                    }
+                }
+                if let Some(ref excludes) = exclude_exts {
+                    if !ext.is_empty() && excludes.contains(&ext) {
+                        continue;
+                    }
+                }
+            }
+
+            let (size, date_modified) = if let Some(meta) = meta {
+                let size = if meta.is_file() { Some(meta.len()) } else { None };
+                let date_modified = meta.modified().ok().map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.to_rfc3339()
+                });
+                (size, date_modified)
+            } else {
+                (None, None)
+            };
+
+            mapped.push(everything_search::EverythingResult {
+                path: item.path,
+                name: item.name,
+                size,
+                date_modified,
+                is_folder: Some(is_folder),
+            });
+
+            if mapped.len() >= max_results {
+                break;
+            }
+        }
+
+        Ok(everything_search::EverythingSearchResponse {
+            total_count: mapped.len() as u32,
+            results: mapped,
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Err("Everything search is only available on Windows".to_string())
     }
 }
 
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn is_everything_available() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        everything_search::windows::is_everything_available()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
+    everything_search::windows::is_everything_available()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn is_everything_available() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[tauri::command]
+pub fn is_everything_available() -> bool {
+    false
 }
 
 /// 获取 Everything 详细状态信息
 /// 返回 (是否可用, 错误代码)
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn get_everything_status() -> (bool, Option<String>) {
-    #[cfg(target_os = "windows")]
-    {
-        everything_search::windows::check_everything_status()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        (false, Some("NOT_WINDOWS".to_string()))
-    }
+    everything_search::windows::check_everything_status()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn get_everything_status() -> (bool, Option<String>) {
+    (true, None)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[tauri::command]
+pub fn get_everything_status() -> (bool, Option<String>) {
+    (false, Some("NOT_WINDOWS".to_string()))
 }
 
 #[tauri::command]
@@ -1919,9 +2092,69 @@ pub fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {
             },
         })
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("get_index_status is only supported on Windows".to_string())
+        let app_data_dir = get_app_data_dir(&app)?;
+
+        // Spotlight 状态（尽量与 Windows 结构对齐）
+        let available = true;
+        let error: Option<String> = None;
+        let version = Some("Spotlight".to_string());
+        let path = Some("mdfind".to_string());
+
+        // 应用索引状态：缓存数量与文件时间
+        let cache_file_path = app_search::windows::get_cache_file_path(&app_data_dir);
+        let cache_mtime = fs::metadata(&cache_file_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let cache_file = cache_file_path.to_str().map(|s| s.to_string());
+
+        let cache = APP_CACHE.clone();
+        let mut cache_guard = cache.lock().map_err(|e| e.to_string())?;
+        if cache_guard.is_none() {
+            if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+                if !disk_cache.is_empty() {
+                    *cache_guard = Some(disk_cache);
+                }
+            }
+        }
+        let apps_total = cache_guard.as_ref().map_or(0, |v| v.len());
+        drop(cache_guard);
+
+        // 文件历史索引状态：SQLite 文件
+        let history_db_path = db::get_db_path(&app_data_dir);
+        let history_mtime = fs::metadata(&history_db_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let history_total = file_history::get_history_count(&app_data_dir)?;
+        let history_path_str = history_db_path.to_str().map(|s| s.to_string());
+
+        Ok(IndexStatus {
+            everything: IndexEverythingStatus {
+                available,
+                error,
+                version,
+                path,
+            },
+            applications: IndexApplicationsStatus {
+                total: apps_total,
+                cache_file,
+                cache_mtime,
+            },
+            file_history: IndexFileHistoryStatus {
+                total: history_total,
+                path: history_path_str,
+                mtime: history_mtime,
+            },
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err("get_index_status is only supported on Windows/macOS".to_string())
     }
 }
 
@@ -2017,7 +2250,13 @@ pub async fn start_everything() -> Result<(), String> {
         .await
         .map_err(|e| format!("启动任务失败: {}", e))?
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 使用 Spotlight(mdfind) 搜索，不存在 Everything 服务需要“启动”的概念。
+        // 为了让前端“启动 Everything”按钮在 macOS 不报错，这里返回 Ok。
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Err("Everything 仅在 Windows 上可用".to_string())
     }
@@ -2808,13 +3047,13 @@ pub async fn show_everything_search_window(app: tauri::AppHandle) -> Result<(), 
             "everything-search-window",
             tauri::WebviewUrl::App("index.html".into()),
         )
-        .title("Everything 文件搜索")
+        .title("文件搜索")
         .inner_size(900.0, 700.0)
         .resizable(true)
         .min_inner_size(600.0, 500.0)
         .center()
         .build()
-        .map_err(|e| format!("创建 Everything 搜索窗口失败: {}", e))?;
+        .map_err(|e| format!("创建文件搜索窗口失败: {}", e))?;
     }
 
     Ok(())
@@ -3288,7 +3527,34 @@ pub fn select_folder() -> Result<Option<String>, String> {
         }
     }
     
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // macOS 使用 osascript 弹出原生文件夹选择器
+        // 取消选择时 osascript 通常返回非 0 并输出 "User canceled."，此处统一返回 None
+        let script = r#"POSIX path of (choose folder with prompt "选择要处理的文件夹")"#;
+        let output = Command::new("osascript")
+            .args(&["-e", script])
+            .output()
+            .map_err(|e| format!("执行 osascript 失败: {}", e))?;
+
+        if output.status.success() {
+            let mut path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // osascript 返回的 POSIX path 通常带末尾 /，为了与其他平台一致这里去掉
+            while path.ends_with('/') {
+                path.pop();
+            }
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // 其他平台暂时返回 None，表示不支持
         Ok(None)
@@ -3463,6 +3729,18 @@ pub fn save_hotkey_config(
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 使用 tauri-plugin-global-shortcut，保存后立即重建注册
+        if let Err(e) = register_macos_hotkeys(&app, &app_data_dir) {
+            eprintln!("[macOS] Failed to register hotkeys: {}", e);
+            return Err(format!(
+                "快捷键设置已保存，但立即生效失败: {}. 请尝试更换组合键或重启应用。",
+                e
+            ));
+        }
+    }
     
     Ok(())
 }
@@ -3524,11 +3802,19 @@ pub fn save_plugin_hotkeys(
         if let Err(e) = crate::hotkey_handler::windows::update_plugin_hotkeys(plugin_hotkeys.clone()) {
             eprintln!("Failed to update plugin hotkeys: {}", e);
         }
-        
-        // 通知前端更新插件快捷键（通过事件）
-        if let Err(e) = app.emit("plugin-hotkeys-updated", plugin_hotkeys) {
-            eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 统一在这里重建快捷键注册（包含启动器/应用中心/插件/应用）
+        if let Err(e) = register_macos_hotkeys(&app, &app_data_dir) {
+            eprintln!("[macOS] Failed to register hotkeys: {}", e);
         }
+    }
+
+    // 通知前端更新插件快捷键（通过事件）
+    if let Err(e) = app.emit("plugin-hotkeys-updated", plugin_hotkeys) {
+        eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
     }
     
     Ok(())
@@ -3568,11 +3854,19 @@ pub fn save_plugin_hotkey(
                 eprintln!("Failed to unregister plugin hotkey: {}", e);
             }
         }
-        
-        // 通知前端更新插件快捷键
-        if let Err(e) = app.emit("plugin-hotkeys-updated", settings.plugin_hotkeys.clone()) {
-            eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 统一重建快捷键注册
+        if let Err(e) = register_macos_hotkeys(&app, &app_data_dir) {
+            eprintln!("[macOS] Failed to register hotkeys: {}", e);
         }
+    }
+
+    // 通知前端更新插件快捷键
+    if let Err(e) = app.emit("plugin-hotkeys-updated", settings.plugin_hotkeys.clone()) {
+        eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
     }
     
     Ok(())
@@ -3621,11 +3915,19 @@ pub fn save_app_hotkey(
                 eprintln!("Failed to unregister app hotkey: {}", e);
             }
         }
-        
-        // 通知前端更新应用快捷键
-        if let Err(e) = app.emit("app-hotkeys-updated", settings.app_hotkeys.clone()) {
-            eprintln!("Failed to emit app-hotkeys-updated event: {}", e);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 统一重建快捷键注册
+        if let Err(e) = register_macos_hotkeys(&app, &app_data_dir) {
+            eprintln!("[macOS] Failed to register hotkeys: {}", e);
         }
+    }
+
+    // 通知前端更新应用快捷键
+    if let Err(e) = app.emit("app-hotkeys-updated", settings.app_hotkeys.clone()) {
+        eprintln!("Failed to emit app-hotkeys-updated event: {}", e);
     }
     
     Ok(())
@@ -3668,11 +3970,19 @@ pub fn save_app_center_hotkey(
                 eprintln!("Failed to unregister app center hotkey: {}", e);
             }
         }
-        
-        // 通知前端更新应用中心快捷键
-        if let Err(e) = app.emit("app-center-hotkey-updated", config) {
-            eprintln!("Failed to emit app-center-hotkey-updated event: {}", e);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 统一重建快捷键注册
+        if let Err(e) = register_macos_hotkeys(&app, &app_data_dir) {
+            eprintln!("[macOS] Failed to register hotkeys: {}", e);
         }
+    }
+
+    // 通知前端更新应用中心快捷键
+    if let Err(e) = app.emit("app-center-hotkey-updated", config) {
+        eprintln!("Failed to emit app-center-hotkey-updated event: {}", e);
     }
     
     Ok(())
@@ -3841,16 +4151,161 @@ mod startup {
 
 #[cfg(not(target_os = "windows"))]
 mod startup {
+    #[cfg(target_os = "macos")]
+    use std::env;
+    #[cfg(target_os = "macos")]
+    use std::fs;
+    #[cfg(target_os = "macos")]
+    use std::path::PathBuf;
+    #[cfg(target_os = "macos")]
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    const LAUNCH_AGENT_LABEL: &str = "com.re-fast.app";
+
+    #[cfg(target_os = "macos")]
+    fn get_launch_agent_plist_path() -> Result<PathBuf, String> {
+        let home = env::var("HOME").map_err(|e| format!("无法读取 HOME 环境变量: {}", e))?;
+        Ok(PathBuf::from(home)
+            .join("Library")
+            .join("LaunchAgents")
+            .join(format!("{}.plist", LAUNCH_AGENT_LABEL)))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_current_exe_path() -> Result<String, String> {
+        std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe path: {}", e))?
+            .to_str()
+            .ok_or_else(|| "Invalid exe path encoding".to_string())
+            .map(|s| s.to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_uid() -> Option<String> {
+        let out = Command::new("id").arg("-u").output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if uid.is_empty() {
+            None
+        } else {
+            Some(uid)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn best_effort_launchctl(args: &[String]) {
+        // 仅做 best-effort：不同 macOS 版本的 launchctl 子命令差异较大
+        let mut cmd = Command::new("launchctl");
+        for a in args {
+            cmd.arg(a);
+        }
+        let _ = cmd.output();
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn is_startup_enabled() -> Result<bool, String> {
-        Err("Startup is only supported on Windows".to_string())
+        let plist = get_launch_agent_plist_path()?;
+        Ok(plist.exists())
     }
 
+    #[cfg(target_os = "macos")]
     pub fn enable_startup() -> Result<(), String> {
-        Err("Startup is only supported on Windows".to_string())
+        let plist = get_launch_agent_plist_path()?;
+        if let Some(parent) = plist.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("创建 LaunchAgents 目录失败: {}", e))?;
+        }
+
+        let exe_path = get_current_exe_path()?;
+
+        // 采用 LaunchAgent 方案：用户级开机启动（登录后启动）
+        let plist_content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+"#,
+            label = LAUNCH_AGENT_LABEL,
+            exe = exe_path
+        );
+
+        fs::write(&plist, plist_content)
+            .map_err(|e| format!("写入 LaunchAgent plist 失败: {}", e))?;
+
+        // 尝试立即加载（失败也不影响下次登录自动加载）
+        if let Some(uid) = get_uid() {
+            best_effort_launchctl(&[
+                "bootstrap".to_string(),
+                format!("gui/{}", uid),
+                plist.to_string_lossy().to_string(),
+            ]);
+        } else {
+            best_effort_launchctl(&[
+                "load".to_string(),
+                "-w".to_string(),
+                plist.to_string_lossy().to_string(),
+            ]);
+        }
+
+        Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     pub fn disable_startup() -> Result<(), String> {
-        Err("Startup is only supported on Windows".to_string())
+        let plist = get_launch_agent_plist_path()?;
+
+        // 尝试立即卸载（失败不影响删除 plist）
+        if plist.exists() {
+            if let Some(uid) = get_uid() {
+                best_effort_launchctl(&[
+                    "bootout".to_string(),
+                    format!("gui/{}", uid),
+                    plist.to_string_lossy().to_string(),
+                ]);
+            } else {
+                best_effort_launchctl(&[
+                    "unload".to_string(),
+                    "-w".to_string(),
+                    plist.to_string_lossy().to_string(),
+                ]);
+            }
+        }
+
+        if plist.exists() {
+            fs::remove_file(&plist).map_err(|e| format!("删除 LaunchAgent plist 失败: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn is_startup_enabled() -> Result<bool, String> {
+        Err("Startup is only supported on Windows/macOS".to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn enable_startup() -> Result<(), String> {
+        Err("Startup is only supported on Windows/macOS".to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn disable_startup() -> Result<(), String> {
+        Err("Startup is only supported on Windows/macOS".to_string())
     }
 }
 

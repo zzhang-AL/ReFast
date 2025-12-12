@@ -255,6 +255,12 @@ pub mod windows {
 #[cfg(not(target_os = "windows"))]
 pub mod windows {
     use serde::{Deserialize, Serialize};
+    #[cfg(target_os = "macos")]
+    use std::env;
+    #[cfg(target_os = "macos")]
+    use std::path::PathBuf;
+    #[cfg(target_os = "macos")]
+    use pinyin::ToPinyin;
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct SystemFolderItem {
@@ -264,10 +270,189 @@ pub mod windows {
         pub is_folder: bool,
     }
 
+    #[cfg(target_os = "macos")]
+    fn to_pinyin(text: &str) -> String {
+        text.to_pinyin()
+            .filter_map(|p| p.map(|p| p.plain()))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn to_pinyin_initials(text: &str) -> String {
+        text.to_pinyin()
+            .filter_map(|p| p.map(|p| p.plain().chars().next()))
+            .flatten()
+            .collect::<String>()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn contains_chinese(text: &str) -> bool {
+        text.chars().any(|c| {
+            matches!(
+                c as u32,
+                0x4E00..=0x9FFF |  // CJK Unified Ideographs
+                0x3400..=0x4DBF |  // CJK Extension A
+                0x20000..=0x2A6DF | // CJK Extension B
+                0x2A700..=0x2B73F | // CJK Extension C
+                0x2B740..=0x2B81F | // CJK Extension D
+                0xF900..=0xFAFF |  // CJK Compatibility Ideographs
+                0x2F800..=0x2FA1F   // CJK Compatibility Ideographs Supplement
+            )
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn push_if_exists(items: &mut Vec<SystemFolderItem>, name_cn: &str, name_en: &str, path: PathBuf, is_folder: bool) {
+        if path.exists() {
+            items.push(SystemFolderItem {
+                name: name_cn.to_string(),
+                path: path.to_string_lossy().to_string(),
+                display_name: format!("{} ({})", name_cn, name_en),
+                is_folder,
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn get_all_system_folders() -> Vec<SystemFolderItem> {
+        let mut folders: Vec<SystemFolderItem> = Vec::new();
+
+        let home = env::var("HOME").ok().map(PathBuf::from);
+        if let Some(home_dir) = home {
+            push_if_exists(&mut folders, "桌面", "Desktop", home_dir.join("Desktop"), true);
+            push_if_exists(&mut folders, "文档", "Documents", home_dir.join("Documents"), true);
+            push_if_exists(&mut folders, "下载", "Downloads", home_dir.join("Downloads"), true);
+            push_if_exists(&mut folders, "图片", "Pictures", home_dir.join("Pictures"), true);
+            push_if_exists(&mut folders, "音乐", "Music", home_dir.join("Music"), true);
+            push_if_exists(&mut folders, "影片", "Movies", home_dir.join("Movies"), true);
+            push_if_exists(&mut folders, "主目录", "Home", home_dir.clone(), true);
+            push_if_exists(&mut folders, "资源库", "Library", home_dir.join("Library"), true);
+            push_if_exists(&mut folders, "废纸篓", "Trash", home_dir.join(".Trash"), true);
+        }
+
+        push_if_exists(&mut folders, "应用程序", "Applications", PathBuf::from("/Applications"), true);
+        push_if_exists(
+            &mut folders,
+            "系统应用",
+            "System Applications",
+            PathBuf::from("/System/Applications"),
+            true,
+        );
+        push_if_exists(
+            &mut folders,
+            "实用工具",
+            "Utilities",
+            PathBuf::from("/Applications/Utilities"),
+            true,
+        );
+
+        // 系统设置（Ventura+）或 系统偏好设置（旧版本）
+        let system_settings = PathBuf::from("/System/Applications/System Settings.app");
+        let system_prefs = PathBuf::from("/System/Applications/System Preferences.app");
+        if system_settings.exists() {
+            folders.push(SystemFolderItem {
+                name: "系统设置".to_string(),
+                path: system_settings.to_string_lossy().to_string(),
+                display_name: "系统设置 (System Settings)".to_string(),
+                is_folder: false,
+            });
+        } else if system_prefs.exists() {
+            folders.push(SystemFolderItem {
+                name: "系统设置".to_string(),
+                path: system_prefs.to_string_lossy().to_string(),
+                display_name: "系统设置 (System Preferences)".to_string(),
+                is_folder: false,
+            });
+        }
+
+        folders
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn get_all_system_folders() -> Vec<SystemFolderItem> {
         Vec::new()
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn search_system_folders(query: &str) -> Vec<SystemFolderItem> {
+        if query.trim().is_empty() {
+            return get_all_system_folders();
+        }
+
+        let query_lower = query.to_lowercase();
+        let query_is_pinyin = !contains_chinese(&query_lower);
+        let all_folders = get_all_system_folders();
+
+        let mut results: Vec<(SystemFolderItem, i32)> = all_folders
+            .into_iter()
+            .filter_map(|folder| {
+                let name_lower = folder.name.to_lowercase();
+                let display_lower = folder.display_name.to_lowercase();
+                let path_lower = folder.path.to_lowercase();
+
+                let mut score = 0;
+
+                if name_lower == query_lower {
+                    score += 1000;
+                } else if name_lower.starts_with(&query_lower) {
+                    score += 500;
+                } else if name_lower.contains(&query_lower) {
+                    score += 100;
+                }
+
+                if display_lower.contains(&query_lower) {
+                    score += 50;
+                }
+
+                if query_is_pinyin {
+                    let name_pinyin = to_pinyin(&folder.name).to_lowercase();
+                    let name_pinyin_initials = to_pinyin_initials(&folder.name).to_lowercase();
+                    let display_pinyin = to_pinyin(&folder.display_name).to_lowercase();
+                    let display_pinyin_initials =
+                        to_pinyin_initials(&folder.display_name).to_lowercase();
+
+                    if name_pinyin == query_lower {
+                        score += 800;
+                    } else if name_pinyin.starts_with(&query_lower) {
+                        score += 400;
+                    } else if name_pinyin.contains(&query_lower) {
+                        score += 150;
+                    }
+
+                    if name_pinyin_initials == query_lower {
+                        score += 600;
+                    } else if name_pinyin_initials.starts_with(&query_lower) {
+                        score += 300;
+                    } else if name_pinyin_initials.contains(&query_lower) {
+                        score += 120;
+                    }
+
+                    if display_pinyin.contains(&query_lower) {
+                        score += 100;
+                    }
+                    if display_pinyin_initials.contains(&query_lower) {
+                        score += 80;
+                    }
+                }
+
+                if path_lower.contains(&query_lower) {
+                    score += 10;
+                }
+
+                if score > 0 {
+                    Some((folder, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results.into_iter().map(|(item, _)| item).collect()
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn search_system_folders(_query: &str) -> Vec<SystemFolderItem> {
         Vec::new()
     }

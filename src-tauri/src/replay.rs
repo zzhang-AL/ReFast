@@ -1,4 +1,6 @@
 use crate::recording::{EventType, MouseButton, RecordedEvent};
+#[cfg(target_os = "macos")]
+use rdev::{Button, Key};
 use serde_json;
 use std::fs;
 use std::path::Path;
@@ -220,12 +222,102 @@ impl ReplayState {
             }
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         {
-            return Err("Replay is only supported on Windows".to_string());
+            use rdev::{simulate, Button, EventType as RdevEvent, Key, SimulateError};
+
+            let ev = match &event.event_type {
+                EventType::MouseMove => {
+                    if let (Some(x), Some(y)) = (event.x, event.y) {
+                        RdevEvent::MouseMove {
+                            x: x as f64,
+                            y: y as f64,
+                        }
+                    } else {
+                        return Err("缺少鼠标坐标".to_string());
+                    }
+                }
+                EventType::MouseDown { button } => RdevEvent::ButtonPress(to_button(*button)),
+                EventType::MouseUp { button } => RdevEvent::ButtonRelease(to_button(*button)),
+                EventType::MouseWheel { delta } => RdevEvent::Wheel {
+                    delta_x: 0,
+                    delta_y: *delta as i64,
+                },
+                EventType::KeyDown { vk_code } => RdevEvent::KeyPress(to_key(*vk_code)),
+                EventType::KeyUp { vk_code } => RdevEvent::KeyRelease(to_key(*vk_code)),
+            };
+            simulate(&ev).map_err(|e| match e {
+                SimulateError => "发送事件失败".to_string(),
+            })?;
+            // 给系统一点时间处理事件
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
 
         Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn to_button(btn: MouseButton) -> Button {
+    match btn {
+        MouseButton::Left => Button::Left,
+        MouseButton::Right => Button::Right,
+        MouseButton::Middle => Button::Middle,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn to_key(vk: u32) -> Key {
+    match vk {
+        0x41 => Key::KeyA,
+        0x42 => Key::KeyB,
+        0x43 => Key::KeyC,
+        0x44 => Key::KeyD,
+        0x45 => Key::KeyE,
+        0x46 => Key::KeyF,
+        0x47 => Key::KeyG,
+        0x48 => Key::KeyH,
+        0x49 => Key::KeyI,
+        0x4A => Key::KeyJ,
+        0x4B => Key::KeyK,
+        0x4C => Key::KeyL,
+        0x4D => Key::KeyM,
+        0x4E => Key::KeyN,
+        0x4F => Key::KeyO,
+        0x50 => Key::KeyP,
+        0x51 => Key::KeyQ,
+        0x52 => Key::KeyR,
+        0x53 => Key::KeyS,
+        0x54 => Key::KeyT,
+        0x55 => Key::KeyU,
+        0x56 => Key::KeyV,
+        0x57 => Key::KeyW,
+        0x58 => Key::KeyX,
+        0x59 => Key::KeyY,
+        0x5A => Key::KeyZ,
+        0x30 => Key::Num0,
+        0x31 => Key::Num1,
+        0x32 => Key::Num2,
+        0x33 => Key::Num3,
+        0x34 => Key::Num4,
+        0x35 => Key::Num5,
+        0x36 => Key::Num6,
+        0x37 => Key::Num7,
+        0x38 => Key::Num8,
+        0x39 => Key::Num9,
+        0x20 => Key::Space,
+        0x0D => Key::Return,
+        0x1B => Key::Escape,
+        0x08 => Key::Backspace,
+        0x2E => Key::Delete,
+        0x28 => Key::DownArrow,
+        0x26 => Key::UpArrow,
+        0x25 => Key::LeftArrow,
+        0x27 => Key::RightArrow,
+        0x10 => Key::ShiftLeft,
+        0x11 => Key::ControlLeft,
+        0x12 => Key::Alt,
+        _ => Key::Unknown(0),
     }
 }
 
